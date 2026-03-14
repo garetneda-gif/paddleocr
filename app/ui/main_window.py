@@ -1,4 +1,4 @@
-"""主窗口 — 整合侧边栏、快速转换面板、高级选项、设置。"""
+"""主窗口 — 侧边栏 + 转换面板（含折叠高级选项）+ 设置。"""
 
 from __future__ import annotations
 
@@ -19,7 +19,6 @@ from app.core.ocr_worker import OCRWorker
 from app.models import DocumentResult
 from app.models.enums import OutputFormat
 from app.models.job import OCRJob
-from app.ui.advanced_panel import AdvancedPanel
 from app.ui.progress_dialog import ProgressDialog
 from app.ui.quick_convert_panel import QuickConvertPanel
 from app.ui.settings_panel import SettingsPanel
@@ -38,7 +37,6 @@ class MainWindow(QMainWindow):
         self._progress_dialog: ProgressDialog | None = None
         self._router = create_default_router()
         self._current_job: OCRJob | None = None
-        self._current_output_dir: Path | None = None
 
         self._setup_ui()
         self._load_styles()
@@ -50,26 +48,19 @@ class MainWindow(QMainWindow):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # 侧边栏
         self._sidebar = Sidebar()
         self._sidebar.page_changed.connect(self._on_page_changed)
         main_layout.addWidget(self._sidebar)
 
-        # 中间主面板（堆叠多页面）— 占满剩余空间
         self._stack = QStackedWidget()
         main_layout.addWidget(self._stack, 1)
 
-        # 页面 0：快速转换
-        self._quick_panel = QuickConvertPanel()
-        self._quick_panel.start_requested.connect(self._on_start_quick)
-        self._stack.addWidget(self._quick_panel)
+        # 页面 0：转换（含折叠高级选项）
+        self._convert_panel = QuickConvertPanel()
+        self._convert_panel.start_requested.connect(self._on_start)
+        self._stack.addWidget(self._convert_panel)
 
-        # 页面 1：高级选项
-        self._advanced_panel = AdvancedPanel()
-        self._advanced_panel.start_requested.connect(self._on_start_advanced)
-        self._stack.addWidget(self._advanced_panel)
-
-        # 页面 2：设置
+        # 页面 1：设置
         self._settings_panel = SettingsPanel()
         self._stack.addWidget(self._settings_panel)
 
@@ -82,30 +73,16 @@ class MainWindow(QMainWindow):
     def _on_page_changed(self, index: int) -> None:
         self._stack.setCurrentIndex(index)
 
-    # ── 快速转换入口 ──
-    def _on_start_quick(self, file_path: Path, fmt: OutputFormat, lang: str) -> None:
+    def _on_start(self, file_path: Path, fmt: OutputFormat, lang: str) -> None:
+        adv = self._convert_panel.get_advanced_params()
+
         job = OCRJob(
             source_path=file_path,
             output_format=fmt,
             language=lang,
+            preserve_layout=adv.get("preserve_layout", False),
         )
-        self._current_output_dir = default_output_dir()
-        self._run_job(job)
 
-    # ── 高级转换入口 ──
-    def _on_start_advanced(self, params: dict) -> None:
-        fmt = OutputFormat(params["output_format"])
-        job = OCRJob(
-            source_path=params["file_path"],
-            output_format=fmt,
-            language=params["language"],
-            preserve_layout=params.get("preserve_layout", False),
-        )
-        job._advanced_params = params
-        self._current_output_dir = params.get("output_dir", default_output_dir())
-        self._run_job(job)
-
-    def _run_job(self, job: OCRJob) -> None:
         self._current_job = job
 
         self._worker = OCRWorker(job)
@@ -132,7 +109,7 @@ class MainWindow(QMainWindow):
             job = self._current_job
             converter = self._router.select_converter(job.output_format)
 
-            output_dir = self._current_output_dir or default_output_dir()
+            output_dir = default_output_dir()
             ext = converter.file_extension
             output_path = output_dir / (job.source_path.stem + ext)
 

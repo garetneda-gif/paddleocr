@@ -12,7 +12,7 @@ class Sidebar(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("sidebar")
-        self.setFixedWidth(180)
+        self.setFixedWidth(160)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 20, 12, 20)
@@ -24,7 +24,7 @@ class Sidebar(QWidget):
         layout.addSpacing(16)
 
         self._buttons: list[QPushButton] = []
-        pages = ["快速转换", "高级选项", "设置"]
+        pages = ["转换", "设置"]
         for i, title in enumerate(pages):
             btn = QPushButton(title)
             btn.setCheckable(True)
@@ -33,7 +33,6 @@ class Sidebar(QWidget):
             self._buttons.append(btn)
 
         layout.addStretch()
-
         self._buttons[0].setChecked(True)
 
     def _on_click(self, index: int) -> None:
