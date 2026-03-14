@@ -7,7 +7,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from app.core.export_router import BaseConverter, ExportRouter
+from app.converters.base_converter import BaseConverter
+from app.core.export_router import ExportRouter, create_default_router
 from app.models.enums import OutputFormat
 
 
@@ -34,3 +35,10 @@ def test_supported_formats():
     router.register(OutputFormat.TXT, DummyConverter())
     router.register(OutputFormat.PDF, DummyConverter())
     assert set(router.supported_formats) == {OutputFormat.TXT, OutputFormat.PDF}
+
+
+def test_default_router_has_all_formats():
+    router = create_default_router()
+    for fmt in OutputFormat:
+        converter = router.select_converter(fmt)
+        assert converter is not None

@@ -2,14 +2,8 @@
 
 from __future__ import annotations
 
+from app.converters.base_converter import BaseConverter
 from app.models.enums import OutputFormat
-
-
-class BaseConverter:
-    """导出器基类，各格式导出器继承并实现 convert 方法。"""
-
-    def convert(self, result, output_path) -> None:
-        raise NotImplementedError
 
 
 class ExportRouter:
@@ -30,3 +24,22 @@ class ExportRouter:
     @property
     def supported_formats(self) -> list[OutputFormat]:
         return list(self._converters.keys())
+
+
+def create_default_router() -> ExportRouter:
+    """创建预注册了所有导出器的路由实例。"""
+    from app.converters.txt_converter import TxtConverter
+    from app.converters.pdf_converter import PdfConverter
+    from app.converters.rtf_converter import RtfConverter
+    from app.converters.word_converter import WordConverter
+    from app.converters.html_converter import HtmlConverter
+    from app.converters.excel_converter import ExcelConverter
+
+    router = ExportRouter()
+    router.register(OutputFormat.TXT, TxtConverter())
+    router.register(OutputFormat.PDF, PdfConverter())
+    router.register(OutputFormat.RTF, RtfConverter())
+    router.register(OutputFormat.WORD, WordConverter())
+    router.register(OutputFormat.HTML, HtmlConverter())
+    router.register(OutputFormat.EXCEL, ExcelConverter())
+    return router
