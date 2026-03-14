@@ -1,4 +1,4 @@
-"""OCR 后台工作线程 — 子进程批量隔离，内存可控。"""
+"""OCR 后台工作线程 — 并行子进程批量处理，内存可控。"""
 
 from __future__ import annotations
 
@@ -67,7 +67,7 @@ class OCRWorker(QThread):
         page_end = min(total, _get_adv(job, "page_end", total))
         actual = page_end - page_start
 
-        # 智能检测：有文字层的 PDF 直接提取（除非用户勾选了"强制 OCR"）
+        # 有文字层且未强制 OCR → 直接提取
         force_ocr = _get_adv(job, "force_ocr", False)
         if is_pdf and text_only and not force_ocr and has_text_layer(job.source_path):
             self.progress.emit("检测到 PDF 文字层，直接提取（无需 OCR）...", 0, actual)
@@ -82,84 +82,101 @@ class OCRWorker(QThread):
             self.finished.emit(doc)
             return
 
+        # ── 2. OCR 模式参数 ──
         user_dpi = _get_adv(job, "render_dpi", 200)
         dpi = _auto_dpi(actual, user_dpi)
         speed_mode = _get_adv(job, "speed_mode", "server")
+        max_workers = _get_adv(job, "parallel_workers", 2)
 
         mode_label = "Mobile" if speed_mode == "mobile" else "Server"
-        self.progress.emit(f"{actual} 页 | DPI {dpi} | {mode_label} | OCR 模式", 0, actual)
+        self.progress.emit(
+            f"{actual} 页 | DPI {dpi} | {mode_label} | {max_workers} 并行",
+            0, actual,
+        )
 
-        # ── 2. 分批子进程 OCR ──
-        from app.core.ocr_subprocess import run_ocr_batch
+        # ── 3. 分批 + 并行 ──
+        from app.core.ocr_subprocess import run_ocr_parallel
 
         all_pages: list[PageResult] = []
         all_texts: list[str] = []
         pages_done = 0
 
-        for batch_start in range(page_start, page_end, BATCH_SIZE):
+        # 将所有页面分成大组，每大组包含 max_workers 个批次并行处理
+        page_indices = list(range(page_start, page_end))
+        # 先按 BATCH_SIZE 分批
+        all_batches_indices: list[list[int]] = []
+        for i in range(0, len(page_indices), BATCH_SIZE):
+            all_batches_indices.append(page_indices[i:i + BATCH_SIZE])
+
+        # 每次并行处理 max_workers 个批次
+        for group_start in range(0, len(all_batches_indices), max_workers):
             if self._cancel:
                 self.error.emit("用户取消了操作")
                 return
 
-            batch_end = min(batch_start + BATCH_SIZE, page_end)
-            batch_size = batch_end - batch_start
+            group = all_batches_indices[group_start:group_start + max_workers]
+            group_page_count = sum(len(b) for b in group)
 
             self.progress.emit(
-                f"正在识别第 {pages_done + 1}~{pages_done + batch_size}/{actual} 页...",
+                f"正在识别第 {pages_done + 1}~{pages_done + group_page_count}/{actual} 页"
+                f"（{len(group)} 批并行）...",
                 pages_done, actual,
             )
 
-            # 渲染本批次的页面
-            batch_images: list[Path] = []
-            if is_pdf:
-                from app.core.pdf_processor import render_page
-                for pi in range(batch_start, batch_end):
-                    batch_images.append(render_page(job.source_path, pi, dpi))
-            else:
-                batch_images = [job.source_path]
+            # 渲染本组所有批次的页面图片
+            batch_images: list[list[Path]] = []
+            for batch_indices in group:
+                imgs = []
+                if is_pdf:
+                    from app.core.pdf_processor import render_page
+                    for pi in batch_indices:
+                        imgs.append(render_page(job.source_path, pi, dpi))
+                else:
+                    imgs = [job.source_path]
+                batch_images.append(imgs)
 
-            # 子进程批量 OCR（完成后自动释放内存）
-            batch_results = run_ocr_batch(batch_images, job.language, speed_mode)
+            # 并行子进程 OCR
+            group_results = run_ocr_parallel(
+                batch_images, job.language, speed_mode, max_workers
+            )
 
             # 删除临时图片
             if is_pdf:
-                for img in batch_images:
-                    if img.exists():
-                        os.unlink(img)
-
-            # 检查错误
-            if batch_results and "error" in batch_results[0]:
-                self.error.emit(batch_results[0]["error"])
-                return
+                for imgs in batch_images:
+                    for img in imgs:
+                        if img.exists():
+                            os.unlink(img)
 
             # 收集结果
-            for idx, page_data in enumerate(batch_results):
-                page_texts = page_data.get("texts", [])
-                if page_texts:
-                    all_texts.append("\n".join(page_texts))
+            for batch_result in group_results:
+                if batch_result and "error" in batch_result[0]:
+                    self.error.emit(batch_result[0]["error"])
+                    return
 
-                if not text_only:
-                    blocks = []
-                    for b in page_data.get("blocks", []):
-                        blocks.append(BlockResult(
-                            block_type=BlockType.PARAGRAPH,
-                            bbox=tuple(b["bbox"]),
-                            text=b["text"],
-                            confidence=b.get("score"),
+                for page_data in batch_result:
+                    page_texts = page_data.get("texts", [])
+                    if page_texts:
+                        all_texts.append("\n".join(page_texts))
+
+                    if not text_only:
+                        blocks = []
+                        for b in page_data.get("blocks", []):
+                            blocks.append(BlockResult(
+                                block_type=BlockType.PARAGRAPH,
+                                bbox=tuple(b["bbox"]),
+                                text=b["text"],
+                                confidence=b.get("score"),
+                            ))
+                        raw_blocks = page_data.get("blocks", [])
+                        all_pages.append(PageResult(
+                            page_index=pages_done,
+                            width=int(max((b["bbox"][2] for b in raw_blocks), default=0)),
+                            height=int(max((b["bbox"][3] for b in raw_blocks), default=0)),
+                            blocks=blocks,
                         ))
-                    raw_blocks = page_data.get("blocks", [])
-                    all_pages.append(PageResult(
-                        page_index=pages_done + idx,
-                        width=int(max((b["bbox"][2] for b in raw_blocks), default=0)),
-                        height=int(max((b["bbox"][3] for b in raw_blocks), default=0)),
-                        blocks=blocks,
-                    ))
+                    pages_done += 1
 
-            pages_done += batch_size
-            self.progress.emit(
-                f"已完成 {pages_done}/{actual} 页",
-                pages_done, actual,
-            )
+            self.progress.emit(f"已完成 {pages_done}/{actual} 页", pages_done, actual)
 
         doc = DocumentResult(
             source_path=job.source_path,
@@ -167,6 +184,5 @@ class OCRWorker(QThread):
             pages=all_pages,
             plain_text="\n\n".join(all_texts),
         )
-
         self.progress.emit("处理完成", actual, actual)
         self.finished.emit(doc)

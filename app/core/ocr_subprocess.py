@@ -1,4 +1,4 @@
-"""子进程 OCR — 批量处理后退出，OS 回收所有内存。"""
+"""子进程 OCR — 批量处理 + 并行支持，退出后 OS 回收所有内存。"""
 
 from __future__ import annotations
 
@@ -6,21 +6,25 @@ import json
 import os
 import tempfile
 from pathlib import Path
+from concurrent.futures import ProcessPoolExecutor
 
-BATCH_SIZE = 50  # 每个子进程处理的页数，之后退出释放内存
+BATCH_SIZE = 50
 
 
-def _subprocess_batch_worker(
-    image_paths_json: str, lang: str, speed_mode: str, out_path: str
-) -> None:
-    """子进程入口：批量 OCR 多页，结果写 JSON 文件。"""
+def _subprocess_batch_worker(args_json: str) -> str:
+    """子进程入口：批量 OCR，返回 JSON 结果文件路径。"""
     os.environ["OMP_NUM_THREADS"] = "2"
     os.environ["OPENBLAS_NUM_THREADS"] = "2"
     os.environ["MKL_NUM_THREADS"] = "2"
     os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "True"
 
+    args = json.loads(args_json)
+    image_paths = args["image_paths"]
+    lang = args["lang"]
+    speed_mode = args["speed_mode"]
+    out_path = args["out_path"]
+
     try:
-        image_paths = json.loads(image_paths_json)
         from paddleocr import PaddleOCR
 
         kwargs = dict(
@@ -59,36 +63,60 @@ def _subprocess_batch_worker(
     except Exception as e:
         Path(out_path).write_text(json.dumps({"error": str(e)}))
 
+    return out_path
+
 
 def run_ocr_batch(image_paths: list[Path], lang: str, speed_mode: str) -> list[dict]:
-    """在子进程中批量 OCR，完成后子进程退出释放所有内存。"""
+    """单批次子进程 OCR（兼容旧接口）。"""
+    return run_ocr_parallel([image_paths], lang, speed_mode, max_workers=1)[0]
+
+
+def run_ocr_parallel(
+    batches: list[list[Path]], lang: str, speed_mode: str, max_workers: int = 2
+) -> list[list[dict]]:
+    """并行多批次 OCR，每个批次在独立子进程中运行。
+
+    Args:
+        batches: [[page1, page2, ...], [page3, page4, ...], ...]
+        max_workers: 同时运行的子进程数
+
+    Returns:
+        [[{texts, blocks}, ...], [...], ...]  与 batches 一一对应
+    """
     import multiprocessing as mp
 
-    result_file = Path(tempfile.mktemp(suffix=".json", prefix="pocr_res_"))
-    paths_json = json.dumps([str(p) for p in image_paths])
+    # 准备每个批次的参数
+    task_args = []
+    for batch in batches:
+        out_path = tempfile.mktemp(suffix=".json", prefix="pocr_res_")
+        args = {
+            "image_paths": [str(p) for p in batch],
+            "lang": lang,
+            "speed_mode": speed_mode,
+            "out_path": out_path,
+        }
+        task_args.append(json.dumps(args))
 
+    # 用 spawn context 的 ProcessPoolExecutor 并行执行
     ctx = mp.get_context("spawn")
-    p = ctx.Process(
-        target=_subprocess_batch_worker,
-        args=(paths_json, lang, speed_mode, str(result_file)),
-    )
-    p.start()
-    p.join(timeout=600)
+    results_by_batch: list[list[dict]] = []
 
-    if p.is_alive():
-        p.kill()
-        p.join()
-        return [{"error": "子进程超时"}]
+    with ProcessPoolExecutor(
+        max_workers=min(max_workers, len(batches)),
+        mp_context=ctx,
+    ) as pool:
+        futures = list(pool.map(_subprocess_batch_worker, task_args, timeout=600))
 
-    if p.exitcode != 0:
-        return [{"error": f"子进程异常退出 (code={p.exitcode})"}]
+    for out_path in futures:
+        p = Path(out_path)
+        if not p.exists():
+            results_by_batch.append([{"error": "子进程未产生结果"}])
+            continue
+        raw = json.loads(p.read_text())
+        p.unlink(missing_ok=True)
+        if isinstance(raw, dict) and "error" in raw:
+            results_by_batch.append([raw])
+        else:
+            results_by_batch.append(raw)
 
-    if not result_file.exists():
-        return [{"error": "子进程未产生结果"}]
-
-    raw = json.loads(result_file.read_text())
-    result_file.unlink(missing_ok=True)
-
-    if isinstance(raw, dict) and "error" in raw:
-        return [raw]
-    return raw
+    return results_by_batch

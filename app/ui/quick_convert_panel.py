@@ -130,13 +130,25 @@ class QuickConvertPanel(QWidget):
         bottom.addWidget(self._start_btn)
         layout.addLayout(bottom)
 
-        # ── 强制 OCR ──
+        # ── 并行 + 强制 OCR ──
+        parallel_row = QHBoxLayout()
+        parallel_row.addWidget(QLabel("并行进程数："))
+        self._parallel_spin = QSpinBox()
+        self._parallel_spin.setRange(1, 4)
+        self._parallel_spin.setValue(2)
+        self._parallel_spin.setFixedWidth(60)
+        self._parallel_spin.setToolTip("同时运行的 OCR 子进程数量。2 适合大多数情况，增大可加速但消耗更多内存")
+        parallel_row.addWidget(self._parallel_spin)
+        parallel_row.addSpacing(20)
+
         self._force_ocr_check = QCheckBox("强制 OCR（忽略 PDF 已有文字层）")
         self._force_ocr_check.setToolTip(
             "默认会自动检测 PDF 是否有文字层，有则直接提取（毫秒级）。\n"
             "勾选此项可强制重新 OCR，适合文字层不准确需要重新识别的场景。"
         )
-        layout.addWidget(self._force_ocr_check)
+        parallel_row.addWidget(self._force_ocr_check)
+        parallel_row.addStretch()
+        layout.addLayout(parallel_row)
 
         # ── PDF 页码范围 ──
         page_row = QHBoxLayout()
@@ -481,7 +493,8 @@ class QuickConvertPanel(QWidget):
             "seal_rec_score_thresh": self._seal_rec_thresh.value(),
             # PDF
             "render_dpi": self._dpi_spin.value(),
-            # PDF
+            # 并行 + PDF
+            "parallel_workers": self._parallel_spin.value(),
             "force_ocr": self._force_ocr_check.isChecked(),
             "page_start": self._page_start.value(),
             "page_end": self._page_end.value(),
