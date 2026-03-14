@@ -1,4 +1,4 @@
-"""格式选择卡片组件。"""
+"""格式选择卡片组件 — 点击选中带视觉高亮。"""
 
 from __future__ import annotations
 
@@ -16,6 +16,25 @@ _FORMAT_INFO: dict[OutputFormat, tuple[str, str]] = {
     OutputFormat.RTF: ("RTF", "富文本格式"),
 }
 
+_NORMAL_STYLE = """
+    QWidget#formatCard {
+        background-color: #FFFFFF;
+        border: 2px solid #E0E0E0;
+        border-radius: 12px;
+    }
+    QWidget#formatCard:hover {
+        border-color: #1A73E8;
+    }
+"""
+
+_SELECTED_STYLE = """
+    QWidget#formatCard {
+        background-color: #E8F0FE;
+        border: 2px solid #1A73E8;
+        border-radius: 12px;
+    }
+"""
+
 
 class FormatCard(QWidget):
     selected = Signal(OutputFormat)
@@ -24,29 +43,34 @@ class FormatCard(QWidget):
         super().__init__(parent)
         self._fmt = fmt
         self._is_selected = False
-        self.setProperty("class", "FormatCard")
+        self.setObjectName("formatCard")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFixedSize(120, 80)
+        self.setStyleSheet(_NORMAL_STYLE)
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         title, desc = _FORMAT_INFO.get(fmt, (fmt.value.upper(), ""))
-        title_label = QLabel(title)
-        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #333;")
-        layout.addWidget(title_label)
+        self._title_label = QLabel(title)
+        self._title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._title_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #333; background: transparent; border: none;")
+        layout.addWidget(self._title_label)
 
-        desc_label = QLabel(desc)
-        desc_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        desc_label.setStyleSheet("font-size: 11px; color: #888;")
-        layout.addWidget(desc_label)
+        self._desc_label = QLabel(desc)
+        self._desc_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._desc_label.setStyleSheet("font-size: 11px; color: #888; background: transparent; border: none;")
+        layout.addWidget(self._desc_label)
 
     def mousePressEvent(self, event):
         self.selected.emit(self._fmt)
 
     def set_selected(self, is_selected: bool) -> None:
         self._is_selected = is_selected
-        self.setProperty("selected", "true" if is_selected else "false")
-        self.style().unpolish(self)
-        self.style().polish(self)
+        if is_selected:
+            self.setStyleSheet(_SELECTED_STYLE)
+            self._title_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #1A73E8; background: transparent; border: none;")
+        else:
+            self.setStyleSheet(_NORMAL_STYLE)
+            self._title_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #333; background: transparent; border: none;")

@@ -11,6 +11,11 @@ from app.models.enums import OutputFormat
 from app.models.job import OCRJob
 
 
+# QThread 默认栈仅 544KB，PaddlePaddle + numpy/OpenBLAS 递归导入链
+# 会直接爆栈（SIGBUS）。设为 64MB 留足余量。
+_WORKER_STACK_SIZE = 64 * 1024 * 1024
+
+
 class OCRWorker(QThread):
     progress = Signal(str, int, int)  # stage, current_page, total_pages
     finished = Signal(DocumentResult)
@@ -18,6 +23,7 @@ class OCRWorker(QThread):
 
     def __init__(self, job: OCRJob, parent=None) -> None:
         super().__init__(parent)
+        self.setStackSize(_WORKER_STACK_SIZE)
         self._job = job
         self._cancel = False
 

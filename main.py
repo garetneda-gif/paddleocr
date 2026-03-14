@@ -5,12 +5,23 @@ import sys
 
 os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
 
-from PySide6.QtWidgets import QApplication
 
-from app.ui.main_window import MainWindow
+def _preload_heavy_modules() -> None:
+    """在主线程预导入重型模块，避免 QThread 子线程递归导入爆栈。"""
+    import numpy  # noqa: F401
+    import numpy.linalg  # noqa: F401
+    import paddle  # noqa: F401
+    import paddleocr  # noqa: F401
+    import cv2  # noqa: F401
 
 
 def main() -> None:
+    # 主线程栈足够大，先把重型 C 扩展导入完成
+    _preload_heavy_modules()
+
+    from PySide6.QtWidgets import QApplication
+    from app.ui.main_window import MainWindow
+
     app = QApplication(sys.argv)
     app.setApplicationName("PaddleOCR")
     app.setApplicationDisplayName("PaddleOCR — 智能文档识别")
