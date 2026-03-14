@@ -1,41 +1,50 @@
 # -*- mode: python ; coding: utf-8 -*-
 # PyInstaller spec — PaddleOCR macOS 桌面应用
-# 用法: pyinstaller packaging/pyinstaller.spec
+# 用法: cd /Users/jikunren/Documents/paddleocr && source .venv/bin/activate && pyinstaller packaging/pyinstaller.spec
 
 import sys
 from pathlib import Path
+from PyInstaller.utils.hooks import collect_all, collect_submodules, collect_data_files
 
 block_cipher = None
 ROOT = Path(SPECPATH).parent
 
+# ---- 自动收集 PaddlePaddle 生态的所有模块和数据 ----
+paddle_datas, paddle_binaries, paddle_hiddenimports = collect_all('paddle')
+paddleocr_datas, paddleocr_bins, paddleocr_hi = collect_all('paddleocr')
+paddlex_datas, paddlex_bins, paddlex_hi = collect_all('paddlex')
+
+# PySide6 Qt 插件、翻译等
+pyside_datas, pyside_bins, pyside_hi = collect_all('PySide6')
+
+# 其他依赖
+extra_hi = collect_submodules('fitz') + collect_submodules('docx') + \
+           collect_submodules('openpyxl') + collect_submodules('reportlab') + \
+           collect_submodules('lxml') + collect_submodules('PIL') + \
+           collect_submodules('cv2') + collect_submodules('numpy') + \
+           collect_submodules('yaml') + collect_submodules('ruamel') + \
+           collect_submodules('ruamel.yaml')
+
+all_datas = paddle_datas + paddleocr_datas + paddlex_datas + pyside_datas + [
+    (str(ROOT / "resources"), "resources"),
+]
+all_binaries = paddle_binaries + paddleocr_bins + paddlex_bins + pyside_bins
+all_hiddenimports = (
+    paddle_hiddenimports + paddleocr_hi + paddlex_hi + pyside_hi + extra_hi + [
+        'app', 'app.models', 'app.core', 'app.converters', 'app.ui', 'app.utils',
+    ]
+)
+
 a = Analysis(
     [str(ROOT / "main.py")],
     pathex=[str(ROOT)],
-    binaries=[],
-    datas=[
-        (str(ROOT / "resources"), "resources"),
-    ],
-    hiddenimports=[
-        "paddleocr",
-        "paddle",
-        "PySide6",
-        "fitz",
-        "docx",
-        "openpyxl",
-        "reportlab",
-        "lxml",
-        "PIL",
-        "cv2",
-        "numpy",
-        "yaml",
-    ],
+    binaries=all_binaries,
+    datas=all_datas,
+    hiddenimports=all_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
-    win_no_prefer_redirects=False,
-    win_private_assemblies=False,
-    cipher=block_cipher,
+    excludes=['tkinter', 'matplotlib', 'IPython', 'notebook', 'jupyter'],
     noarchive=False,
 )
 
@@ -50,7 +59,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,  # UPX 对大型 native 库可能有问题
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=True,
@@ -65,7 +74,7 @@ coll = COLLECT(
     a.zipfiles,
     a.datas,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     name="PaddleOCR",
 )
@@ -79,5 +88,6 @@ app = BUNDLE(
         "CFBundleDisplayName": "PaddleOCR",
         "CFBundleShortVersionString": "1.0.0",
         "NSHighResolutionCapable": True,
+        "LSMinimumSystemVersion": "11.0",
     },
 )
