@@ -7,7 +7,7 @@ import os
 import tempfile
 from pathlib import Path
 
-BATCH_SIZE = 20  # 每个子进程处理的页数，之后退出释放内存
+BATCH_SIZE = 50  # 每个子进程处理的页数，之后退出释放内存
 
 
 def _subprocess_batch_worker(

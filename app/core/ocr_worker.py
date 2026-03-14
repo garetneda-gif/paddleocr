@@ -55,9 +55,9 @@ class OCRWorker(QThread):
             and not job.preserve_layout
         )
 
-        # ── 1. 页数 + DPI ──
+        # ── 1. 页数 + 文字层检测 ──
         if is_pdf:
-            from app.core.pdf_processor import get_page_count
+            from app.core.pdf_processor import get_page_count, has_text_layer, extract_text_direct
             self.progress.emit("正在读取 PDF...", 0, 0)
             total = get_page_count(job.source_path)
         else:
@@ -67,14 +67,29 @@ class OCRWorker(QThread):
         page_end = min(total, _get_adv(job, "page_end", total))
         actual = page_end - page_start
 
+        # 智能检测：有文字层的 PDF 直接提取（除非用户勾选了"强制 OCR"）
+        force_ocr = _get_adv(job, "force_ocr", False)
+        if is_pdf and text_only and not force_ocr and has_text_layer(job.source_path):
+            self.progress.emit("检测到 PDF 文字层，直接提取（无需 OCR）...", 0, actual)
+            texts = extract_text_direct(job.source_path, page_start, page_end)
+            doc = DocumentResult(
+                source_path=job.source_path,
+                page_count=actual,
+                pages=[],
+                plain_text="\n\n".join(t for t in texts if t.strip()),
+            )
+            self.progress.emit("提取完成", actual, actual)
+            self.finished.emit(doc)
+            return
+
         user_dpi = _get_adv(job, "render_dpi", 200)
         dpi = _auto_dpi(actual, user_dpi)
         speed_mode = _get_adv(job, "speed_mode", "server")
 
         mode_label = "Mobile" if speed_mode == "mobile" else "Server"
-        self.progress.emit(f"{actual} 页 | DPI {dpi} | {mode_label}", 0, actual)
+        self.progress.emit(f"{actual} 页 | DPI {dpi} | {mode_label} | OCR 模式", 0, actual)
 
-        # ── 2. 分批处理 ──
+        # ── 2. 分批子进程 OCR ──
         from app.core.ocr_subprocess import run_ocr_batch
 
         all_pages: list[PageResult] = []

@@ -1,11 +1,41 @@
-"""PDF 处理 — 逐页渲染，用完释放，避免内存爆炸。"""
+"""PDF 处理 — 智能检测文字层，有文字层直接提取，无则 OCR。"""
 
 from __future__ import annotations
 
 import tempfile
 from pathlib import Path
 
-RENDER_DPI = 200  # 从 300 降到 200，大幅减少内存且质量够用
+RENDER_DPI = 200
+
+
+def has_text_layer(pdf_path: Path, sample_pages: int = 5) -> bool:
+    """检测 PDF 是否有可提取的文字层（非扫描件）。"""
+    import fitz
+    doc = fitz.open(str(pdf_path))
+    pages_with_text = 0
+    check_count = min(sample_pages, len(doc))
+    for i in range(check_count):
+        text = doc[i].get_text().strip()
+        if len(text) > 20:  # 至少 20 字符才算有文字层
+            pages_with_text += 1
+    doc.close()
+    return pages_with_text >= check_count * 0.6  # 60% 以上页面有文字
+
+
+def extract_text_direct(
+    pdf_path: Path, page_start: int = 0, page_end: int | None = None
+) -> list[str]:
+    """直接从 PDF 文字层提取文本（毫秒级，不需要 OCR）。"""
+    import fitz
+    doc = fitz.open(str(pdf_path))
+    if page_end is None:
+        page_end = len(doc)
+
+    texts = []
+    for i in range(page_start, min(page_end, len(doc))):
+        texts.append(doc[i].get_text())
+    doc.close()
+    return texts
 
 
 def get_page_count(pdf_path: Path) -> int:

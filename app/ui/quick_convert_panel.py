@@ -130,6 +130,14 @@ class QuickConvertPanel(QWidget):
         bottom.addWidget(self._start_btn)
         layout.addLayout(bottom)
 
+        # ── 强制 OCR ──
+        self._force_ocr_check = QCheckBox("强制 OCR（忽略 PDF 已有文字层）")
+        self._force_ocr_check.setToolTip(
+            "默认会自动检测 PDF 是否有文字层，有则直接提取（毫秒级）。\n"
+            "勾选此项可强制重新 OCR，适合文字层不准确需要重新识别的场景。"
+        )
+        layout.addWidget(self._force_ocr_check)
+
         # ── PDF 页码范围 ──
         page_row = QHBoxLayout()
         page_row.addWidget(QLabel("PDF 页码范围："))
@@ -473,7 +481,8 @@ class QuickConvertPanel(QWidget):
             "seal_rec_score_thresh": self._seal_rec_thresh.value(),
             # PDF
             "render_dpi": self._dpi_spin.value(),
-            # 页码范围
+            # PDF
+            "force_ocr": self._force_ocr_check.isChecked(),
             "page_start": self._page_start.value(),
             "page_end": self._page_end.value(),
         }
