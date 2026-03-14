@@ -113,6 +113,15 @@ class QuickConvertPanel(QWidget):
             self._lang_combo.addItem(name, code)
         self._lang_combo.setFixedWidth(200)
         bottom.addWidget(self._lang_combo)
+        bottom.addSpacing(20)
+        bottom.addWidget(QLabel("模式："))
+        self._speed_combo = QComboBox()
+        self._speed_combo.addItem("均衡（Server 模型）", "server")
+        self._speed_combo.addItem("速度优先（Mobile 模型，快 8x）", "mobile")
+        self._speed_combo.setFixedWidth(260)
+        self._speed_combo.setToolTip("Mobile 模型推理速度约为 Server 的 8 倍，精度略低")
+        bottom.addWidget(self._speed_combo)
+
         bottom.addStretch()
         self._start_btn = QPushButton("开始转换")
         self._start_btn.setObjectName("startButton")
@@ -408,6 +417,8 @@ class QuickConvertPanel(QWidget):
     def get_advanced_params(self) -> dict:
         """供 MainWindow 读取全部高级参数。"""
         return {
+            # 速度模式
+            "speed_mode": self._speed_combo.currentData(),
             # pipeline
             "pipeline": self._pipeline_combo.currentData(),
             "preserve_layout": self._preserve_layout_check.isChecked(),

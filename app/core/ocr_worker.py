@@ -1,18 +1,16 @@
-"""OCR 后台工作线程 — 按 OutputFormat 路由到正确的 pipeline。"""
+"""OCR 后台工作线程 — 逐页处理，内存友好。"""
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal
 
-from app.models import DocumentResult
+from app.models import DocumentResult, PageResult
 from app.models.enums import OutputFormat
 from app.models.job import OCRJob
 
-
-# QThread 默认栈仅 544KB，PaddlePaddle + numpy/OpenBLAS 递归导入链
-# 会直接爆栈（SIGBUS）。设为 64MB 留足余量。
 _WORKER_STACK_SIZE = 64 * 1024 * 1024
 
 
@@ -38,24 +36,21 @@ class OCRWorker(QThread):
 
     def _do_work(self) -> None:
         job = self._job
-
-        # ── 1. PDF 页面提取 ──
         suffix = job.source_path.suffix.lower()
-        if suffix == ".pdf":
-            self.progress.emit("正在提取 PDF 页面（可能需要较长时间）...", 0, 0)
-            image_paths = self._extract_pdf_pages(job.source_path)
-            if self._cancel:
-                self.error.emit("用户取消了操作")
-                return
+        is_pdf = suffix == ".pdf"
+
+        # ── 1. 确定页数 ──
+        if is_pdf:
+            from app.core.pdf_processor import get_page_count
+            self.progress.emit("正在读取 PDF 信息...", 0, 0)
+            total = get_page_count(job.source_path)
         else:
-            image_paths = [job.source_path]
+            total = 1
 
-        total = len(image_paths)
-        self.progress.emit(f"PDF 共 {total} 页，正在初始化模型...", 0, total)
+        self.progress.emit(f"共 {total} 页，正在初始化模型...", 0, total)
 
-        # ── 2. 选择并初始化引擎 ──
+        # ── 2. 初始化引擎 ──
         use_structure = self._should_use_structure(job)
-
         if use_structure:
             from app.core.structure_engine import StructureEngine
             engine = StructureEngine(lang=job.language)
@@ -64,24 +59,33 @@ class OCRWorker(QThread):
             engine = OCREngine(lang=job.language)
 
         engine._ensure_model()
-
         if self._cancel:
-            self.error.emit("用户取消了操作")
             return
 
         self.progress.emit("模型就绪，开始识别...", 0, total)
 
-        # ── 3. 逐页识别 ──
-        all_pages = []
-        all_texts = []
+        # ── 3. 逐页渲染+识别（不一次性加载所有页面） ──
+        all_pages: list[PageResult] = []
+        all_texts: list[str] = []
 
-        for i, img_path in enumerate(image_paths):
+        for i in range(total):
             if self._cancel:
                 self.error.emit("用户取消了操作")
                 return
 
             self.progress.emit(f"正在识别第 {i + 1}/{total} 页...", i + 1, total)
+
+            if is_pdf:
+                from app.core.pdf_processor import render_page
+                img_path = render_page(job.source_path, i)
+            else:
+                img_path = job.source_path
+
             page_result = engine.predict(img_path)
+
+            # 用完立即删除临时文件
+            if is_pdf and img_path.exists():
+                os.unlink(img_path)
 
             for page in page_result.pages:
                 page.page_index = len(all_pages)
@@ -107,7 +111,3 @@ class OCRWorker(QThread):
         if job.preserve_layout and fmt in (OutputFormat.TXT, OutputFormat.RTF):
             return True
         return False
-
-    def _extract_pdf_pages(self, pdf_path: Path) -> list[Path]:
-        from app.core.pdf_processor import extract_pages
-        return extract_pages(pdf_path)
