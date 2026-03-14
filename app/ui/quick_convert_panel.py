@@ -130,6 +130,25 @@ class QuickConvertPanel(QWidget):
         bottom.addWidget(self._start_btn)
         layout.addLayout(bottom)
 
+        # ── PDF 页码范围 ──
+        page_row = QHBoxLayout()
+        page_row.addWidget(QLabel("PDF 页码范围："))
+        self._page_start = QSpinBox()
+        self._page_start.setRange(1, 9999)
+        self._page_start.setValue(1)
+        self._page_start.setFixedWidth(80)
+        page_row.addWidget(self._page_start)
+        page_row.addWidget(QLabel(" ~ "))
+        self._page_end = QSpinBox()
+        self._page_end.setRange(1, 9999)
+        self._page_end.setValue(9999)
+        self._page_end.setFixedWidth(80)
+        self._page_end.setToolTip("设为 9999 表示处理到最后一页")
+        page_row.addWidget(self._page_end)
+        page_row.addWidget(_hint("大 PDF 建议先处理部分页面测试效果。>50 页自动降 DPI"))
+        page_row.addStretch()
+        layout.addLayout(page_row)
+
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         # 折叠高级选项
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -454,4 +473,7 @@ class QuickConvertPanel(QWidget):
             "seal_rec_score_thresh": self._seal_rec_thresh.value(),
             # PDF
             "render_dpi": self._dpi_spin.value(),
+            # 页码范围
+            "page_start": self._page_start.value(),
+            "page_end": self._page_end.value(),
         }
