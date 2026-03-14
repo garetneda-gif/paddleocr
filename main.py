@@ -4,6 +4,10 @@ import os
 import sys
 
 os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
+# 限制 CPU 线程，防止 OpenBLAS/paddle 吃满所有核心导致 UI 卡死
+os.environ.setdefault("OMP_NUM_THREADS", "2")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "2")
+os.environ.setdefault("MKL_NUM_THREADS", "2")
 
 
 def _patch_frozen_deps() -> None:

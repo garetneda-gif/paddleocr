@@ -1,19 +1,18 @@
-"""OCR 后台工作线程 — 逐页处理，流式输出，内存友好。"""
+"""OCR 后台工作线程 — 子进程批量隔离，内存可控。"""
 
 from __future__ import annotations
 
-import gc
 import os
 from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal
 
-from app.models import BlockResult, DocumentResult, PageResult
+from app.models import BlockResult, BlockType, DocumentResult, PageResult
 from app.models.enums import OutputFormat
 from app.models.job import OCRJob
+from app.core.ocr_subprocess import BATCH_SIZE
 
 _WORKER_STACK_SIZE = 64 * 1024 * 1024
-_GC_INTERVAL = 10  # 每 N 页强制 GC
 
 
 def _get_adv(job: OCRJob, key: str, default=None):
@@ -21,14 +20,11 @@ def _get_adv(job: OCRJob, key: str, default=None):
 
 
 def _auto_dpi(page_count: int, user_dpi: int) -> int:
-    """大 PDF 自动降低 DPI，避免内存爆炸和长时间处理。"""
-    if user_dpi > 0 and page_count <= 50:
-        return user_dpi  # 用户设置的 DPI，小文档不降
+    if page_count <= 50:
+        return user_dpi
     if page_count > 200:
         return min(user_dpi, 100)
-    if page_count > 50:
-        return min(user_dpi, 150)
-    return user_dpi
+    return min(user_dpi, 150)
 
 
 class OCRWorker(QThread):
@@ -53,14 +49,13 @@ class OCRWorker(QThread):
 
     def _do_work(self) -> None:
         job = self._job
-        suffix = job.source_path.suffix.lower()
-        is_pdf = suffix == ".pdf"
-        fmt = job.output_format
+        is_pdf = job.source_path.suffix.lower() == ".pdf"
+        text_only = (
+            job.output_format in (OutputFormat.TXT, OutputFormat.RTF)
+            and not job.preserve_layout
+        )
 
-        # 是否只需要纯文本（不需要 bbox/blocks）
-        text_only = fmt in (OutputFormat.TXT, OutputFormat.RTF) and not job.preserve_layout
-
-        # ── 1. 确定页数和 DPI ──
+        # ── 1. 页数 + DPI ──
         if is_pdf:
             from app.core.pdf_processor import get_page_count
             self.progress.emit("正在读取 PDF...", 0, 0)
@@ -68,110 +63,95 @@ class OCRWorker(QThread):
         else:
             total = 1
 
-        # 页码范围
-        page_start = _get_adv(job, "page_start", 1) - 1  # 转 0-based
-        page_end = _get_adv(job, "page_end", total)
-        page_start = max(0, min(page_start, total - 1))
-        page_end = max(page_start + 1, min(page_end, total))
-        actual_count = page_end - page_start
+        page_start = max(0, _get_adv(job, "page_start", 1) - 1)
+        page_end = min(total, _get_adv(job, "page_end", total))
+        actual = page_end - page_start
 
-        # 自动 DPI
         user_dpi = _get_adv(job, "render_dpi", 200)
-        dpi = _auto_dpi(actual_count, user_dpi)
-        if dpi != user_dpi:
-            self.progress.emit(
-                f"共 {actual_count} 页，DPI 自动调整为 {dpi}（原 {user_dpi}）...", 0, actual_count
-            )
-        else:
-            self.progress.emit(f"共 {actual_count} 页，正在初始化模型...", 0, actual_count)
-
-        # ── 2. 初始化引擎 ──
+        dpi = _auto_dpi(actual, user_dpi)
         speed_mode = _get_adv(job, "speed_mode", "server")
-        use_structure = self._should_use_structure(job)
 
-        if use_structure:
-            from app.core.structure_engine import StructureEngine
-            engine = StructureEngine(lang=job.language)
-        else:
-            from app.core.ocr_engine import OCREngine
-            engine = OCREngine(lang=job.language, speed_mode=speed_mode)
+        mode_label = "Mobile" if speed_mode == "mobile" else "Server"
+        self.progress.emit(f"{actual} 页 | DPI {dpi} | {mode_label}", 0, actual)
 
-        engine._ensure_model()
-        if self._cancel:
-            return
+        # ── 2. 分批处理 ──
+        from app.core.ocr_subprocess import run_ocr_batch
 
-        self.progress.emit("模型就绪，开始识别...", 0, actual_count)
-
-        # ── 3. 逐页处理 ──
         all_pages: list[PageResult] = []
         all_texts: list[str] = []
+        pages_done = 0
 
-        for seq, page_idx in enumerate(range(page_start, page_end)):
+        for batch_start in range(page_start, page_end, BATCH_SIZE):
             if self._cancel:
                 self.error.emit("用户取消了操作")
                 return
 
+            batch_end = min(batch_start + BATCH_SIZE, page_end)
+            batch_size = batch_end - batch_start
+
             self.progress.emit(
-                f"正在识别第 {seq + 1}/{actual_count} 页（DPI {dpi}）...",
-                seq + 1, actual_count
+                f"正在识别第 {pages_done + 1}~{pages_done + batch_size}/{actual} 页...",
+                pages_done, actual,
             )
 
-            # 渲染单页
+            # 渲染本批次的页面
+            batch_images: list[Path] = []
             if is_pdf:
                 from app.core.pdf_processor import render_page
-                img_path = render_page(job.source_path, page_idx, dpi)
+                for pi in range(batch_start, batch_end):
+                    batch_images.append(render_page(job.source_path, pi, dpi))
             else:
-                img_path = job.source_path
+                batch_images = [job.source_path]
 
-            page_result = engine.predict(img_path)
+            # 子进程批量 OCR（完成后自动释放内存）
+            batch_results = run_ocr_batch(batch_images, job.language, speed_mode)
 
-            # 删除临时文件
-            if is_pdf and img_path.exists():
-                os.unlink(img_path)
+            # 删除临时图片
+            if is_pdf:
+                for img in batch_images:
+                    if img.exists():
+                        os.unlink(img)
 
-            # 收集结果（text_only 模式只保留文本，不保留 blocks）
-            if text_only:
-                if page_result.plain_text:
-                    all_texts.append(page_result.plain_text)
-                # 不保留 blocks，节省大量内存
-            else:
-                for page in page_result.pages:
-                    page.page_index = len(all_pages)
-                    all_pages.append(page)
-                if page_result.plain_text:
-                    all_texts.append(page_result.plain_text)
+            # 检查错误
+            if batch_results and "error" in batch_results[0]:
+                self.error.emit(batch_results[0]["error"])
+                return
 
-            # 释放推理中间结果引用
-            del page_result
+            # 收集结果
+            for idx, page_data in enumerate(batch_results):
+                page_texts = page_data.get("texts", [])
+                if page_texts:
+                    all_texts.append("\n".join(page_texts))
 
-            # 定期 GC
-            if (seq + 1) % _GC_INTERVAL == 0:
-                gc.collect()
+                if not text_only:
+                    blocks = []
+                    for b in page_data.get("blocks", []):
+                        blocks.append(BlockResult(
+                            block_type=BlockType.PARAGRAPH,
+                            bbox=tuple(b["bbox"]),
+                            text=b["text"],
+                            confidence=b.get("score"),
+                        ))
+                    raw_blocks = page_data.get("blocks", [])
+                    all_pages.append(PageResult(
+                        page_index=pages_done + idx,
+                        width=int(max((b["bbox"][2] for b in raw_blocks), default=0)),
+                        height=int(max((b["bbox"][3] for b in raw_blocks), default=0)),
+                        blocks=blocks,
+                    ))
 
-        # 最终 GC
-        gc.collect()
+            pages_done += batch_size
+            self.progress.emit(
+                f"已完成 {pages_done}/{actual} 页",
+                pages_done, actual,
+            )
 
-        result = DocumentResult(
+        doc = DocumentResult(
             source_path=job.source_path,
-            page_count=len(all_pages) if all_pages else actual_count,
+            page_count=actual,
             pages=all_pages,
-            plain_text="\n".join(all_texts),
+            plain_text="\n\n".join(all_texts),
         )
 
-        self.progress.emit("处理完成", actual_count, actual_count)
-        self.finished.emit(result)
-
-    def _should_use_structure(self, job: OCRJob) -> bool:
-        # 允许高级参数覆盖
-        pipeline = _get_adv(job, "pipeline", "auto")
-        if pipeline == "ocr":
-            return False
-        if pipeline == "structure":
-            return True
-        # auto 模式
-        fmt = job.output_format
-        if fmt in (OutputFormat.WORD, OutputFormat.HTML, OutputFormat.EXCEL):
-            return True
-        if job.preserve_layout and fmt in (OutputFormat.TXT, OutputFormat.RTF):
-            return True
-        return False
+        self.progress.emit("处理完成", actual, actual)
+        self.finished.emit(doc)
