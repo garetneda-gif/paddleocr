@@ -1,4 +1,4 @@
-"""转换面板 — 文件选择 + 格式 + 语言 + 折叠高级选项（完整参数）+ 开始。"""
+"""转换面板 — 文件选择 + 格式 + 语言 + 按当前后端生效的高级选项。"""
 
 from __future__ import annotations
 
@@ -69,6 +69,9 @@ class QuickConvertPanel(QWidget):
 
         self._selected_file: Path | None = None
         self._selected_format: OutputFormat = OutputFormat.TXT
+        self._paddle_ok = self._check_paddle()
+        self._server_onnx_ok = self._check_server_onnx()
+        self._onnx_langs = set(self._supported_onnx_languages())
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -110,7 +113,8 @@ class QuickConvertPanel(QWidget):
         bottom.addWidget(QLabel("识别语言："))
         self._lang_combo = QComboBox()
         for code, name in _LANGUAGES:
-            self._lang_combo.addItem(name, code)
+            if self._paddle_ok or code in self._onnx_langs:
+                self._lang_combo.addItem(name, code)
         self._lang_combo.setFixedWidth(200)
         bottom.addWidget(self._lang_combo)
         bottom.addSpacing(20)
@@ -119,7 +123,11 @@ class QuickConvertPanel(QWidget):
         self._speed_combo.addItem("均衡（Server 模型）", "server")
         self._speed_combo.addItem("速度优先（Mobile 模型，快 8x）", "mobile")
         self._speed_combo.setFixedWidth(260)
-        self._speed_combo.setToolTip("Mobile 模型推理速度约为 Server 的 8 倍，精度略低")
+        self._speed_combo.setToolTip("不同模式会切换不同 ONNX 模型；Server 更准，Mobile 更省内存")
+        if not self._server_onnx_ok:
+            self._speed_combo.model().item(0).setEnabled(False)
+            self._speed_combo.setCurrentIndex(1)
+            self._speed_combo.setToolTip("当前环境未找到 Server ONNX 模型，仅可使用 Mobile 模式")
         bottom.addWidget(self._speed_combo)
 
         bottom.addStretch()
@@ -172,7 +180,7 @@ class QuickConvertPanel(QWidget):
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         # 折叠高级选项
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        self._adv_toggle = QPushButton("▶ 高级选项（全部 PaddleOCR 参数）")
+        self._adv_toggle = QPushButton("▶ 高级选项（按当前引擎生效）")
         self._adv_toggle.setStyleSheet(
             "QPushButton { border: none; color: #1A73E8; font-size: 13px; "
             "text-align: left; padding: 4px 0; } "
@@ -189,40 +197,52 @@ class QuickConvertPanel(QWidget):
         adv.setSpacing(12)
 
         # ─── 1. Pipeline 选择 ───
-        grp_pipeline = QGroupBox("识别模式")
-        gl = QVBoxLayout(grp_pipeline)
+        self._pipeline_group = QGroupBox("识别模式")
+        gl = QVBoxLayout(self._pipeline_group)
         pl_row = QHBoxLayout()
         pl_row.addWidget(QLabel("Pipeline："))
         self._pipeline_combo = QComboBox()
         self._pipeline_combo.addItem("自动（按输出格式决定）", "auto")
-        self._pipeline_combo.addItem("PP-OCRv5（纯文本识别）", "ocr")
+        self._pipeline_combo.addItem("OCR（ONNX Runtime / Paddle）", "ocr")
         self._pipeline_combo.addItem("PPStructureV3（结构化解析）", "structure")
         self._pipeline_combo.setFixedWidth(280)
         pl_row.addWidget(self._pipeline_combo)
         pl_row.addStretch()
         gl.addLayout(pl_row)
-        gl.addWidget(_hint("自动模式：TXT/PDF/RTF → PP-OCRv5，Word/HTML/Excel → PPStructureV3"))
+        gl.addWidget(
+            _hint(
+                "自动模式：TXT/PDF/RTF 走 OCR；Word/HTML/Excel 优先结构化。"
+                "若结构化后端不可用，会降级为纯文本 OCR 导出。"
+            )
+        )
 
         self._preserve_layout_check = QCheckBox("TXT/RTF 保留版面结构")
         gl.addWidget(self._preserve_layout_check)
         gl.addWidget(_hint("勾选后 TXT/RTF 导出也走 PPStructureV3，以保留段落和标题层次"))
 
-        # 检查 PaddlePaddle 是否可用，不可用则禁用 PPStructureV3
-        self._paddle_ok = self._check_paddle()
         if not self._paddle_ok:
             model = self._pipeline_combo.model()
             model.item(2).setEnabled(False)  # 禁用 "PPStructureV3" 选项
             self._preserve_layout_check.setEnabled(False)
             self._no_paddle_hint = _hint(
                 "⚠ PPStructureV3 不可用（需要 PaddlePaddle）。"
-                "Word/HTML/Excel 输出将使用 ONNX 纯文本模式。"
+                "Word/HTML/Excel 将降级为纯文本 OCR 导出。"
             )
             self._no_paddle_hint.setStyleSheet(
                 "font-size: 11px; color: #e67e22; margin-left: 24px;"
             )
             gl.addWidget(self._no_paddle_hint)
+        if not self._paddle_ok:
+            self._onnx_lang_hint = _hint("当前仅提供 ONNX 可用语言：中文、英文。")
+            self._onnx_lang_hint.setStyleSheet(
+                "font-size: 11px; color: #1A73E8; margin-left: 24px;"
+            )
+            gl.addWidget(self._onnx_lang_hint)
 
-        adv.addWidget(grp_pipeline)
+        self._backend_hint = _hint("")
+        gl.addWidget(self._backend_hint)
+
+        adv.addWidget(self._pipeline_group)
 
         # ─── 2. 文档预处理 ───
         grp_preproc = QGroupBox("文档预处理")
@@ -234,15 +254,15 @@ class QuickConvertPanel(QWidget):
 
         self._unwarp_check = QCheckBox("文档弯曲矫正（use_doc_unwarping）")
         gp.addWidget(self._unwarp_check)
-        gp.addWidget(_hint("对手机拍摄的弯曲/透视变形文档做几何校正，使文字行恢复水平"))
+        gp.addWidget(_hint("对手机拍摄的弯曲/透视变形文档做几何校正。当前 ONNX OCR 不支持时会自动禁用"))
 
         self._textline_ori_check = QCheckBox("文本行方向检测（use_textline_orientation）")
         gp.addWidget(self._textline_ori_check)
-        gp.addWidget(_hint("检测每行文字是横排还是竖排并分别处理，适合中日韩竖排古籍。仅 PP-OCRv5 可用"))
+        gp.addWidget(_hint("检测每行文字是横排还是竖排并分别处理，适合竖排文档。ONNX OCR 与 PaddleOCR 都会消费该项"))
         adv.addWidget(grp_preproc)
 
         # ─── 3. 文本检测参数 ───
-        grp_det = QGroupBox("文本检测参数（PP-OCRv5）")
+        grp_det = QGroupBox("文本检测参数（OCR）")
         gd = QVBoxLayout(grp_det)
 
         self._det_limit_side = QSpinBox()
@@ -290,7 +310,7 @@ class QuickConvertPanel(QWidget):
         adv.addWidget(grp_det)
 
         # ─── 4. 文本识别参数 ───
-        grp_rec = QGroupBox("文本识别参数")
+        grp_rec = QGroupBox("文本识别参数（OCR）")
         gr = QVBoxLayout(grp_rec)
 
         self._rec_score_thresh = QDoubleSpinBox()
@@ -309,13 +329,13 @@ class QuickConvertPanel(QWidget):
 
         self._return_word_box = QCheckBox("返回单词级边框（return_word_box）")
         gr.addWidget(self._return_word_box)
-        gr.addWidget(_hint("除了行级边框外，额外返回每个单词的精确位置。用于搜索型 PDF 精确定位"))
+        gr.addWidget(_hint("除了行级边框外，额外返回每个单词的精确位置。当前仅 PaddleOCR 提供，ONNX 模式会自动禁用"))
 
         adv.addWidget(grp_rec)
 
         # ─── 5. PPStructureV3 功能开关 ───
-        grp_struct = QGroupBox("结构化解析功能（PPStructureV3）")
-        gs = QVBoxLayout(grp_struct)
+        self._struct_group = QGroupBox("结构化解析功能（PPStructureV3）")
+        gs = QVBoxLayout(self._struct_group)
         gs.addWidget(_hint("以下开关仅在使用 PPStructureV3 pipeline 时生效"))
 
         self._use_table = QCheckBox("表格识别（use_table_recognition）")
@@ -344,12 +364,12 @@ class QuickConvertPanel(QWidget):
         gs.addWidget(_hint("在版面分析基础上进一步检测图文混排区域，提升复杂版面的解析精度"))
 
         if not self._paddle_ok:
-            grp_struct.setEnabled(False)
-        adv.addWidget(grp_struct)
+            self._struct_group.setEnabled(False)
+        adv.addWidget(self._struct_group)
 
         # ─── 6. 版面分析参数 ───
-        grp_layout = QGroupBox("版面分析参数（PPStructureV3）")
-        gla = QVBoxLayout(grp_layout)
+        self._layout_group = QGroupBox("版面分析参数（PPStructureV3）")
+        gla = QVBoxLayout(self._layout_group)
 
         self._layout_thresh = QDoubleSpinBox()
         self._layout_thresh.setRange(0.01, 1.0)
@@ -388,12 +408,12 @@ class QuickConvertPanel(QWidget):
         gla.addWidget(_hint("控制如何合并相邻的版面区域。large 适合报纸/杂志等大分栏版面"))
 
         if not self._paddle_ok:
-            grp_layout.setEnabled(False)
-        adv.addWidget(grp_layout)
+            self._layout_group.setEnabled(False)
+        adv.addWidget(self._layout_group)
 
         # ─── 7. 印章检测参数 ───
-        grp_seal = QGroupBox("印章检测参数（PPStructureV3）")
-        gse = QVBoxLayout(grp_seal)
+        self._seal_group = QGroupBox("印章检测参数（PPStructureV3）")
+        gse = QVBoxLayout(self._seal_group)
 
         self._seal_det_thresh = QDoubleSpinBox()
         self._seal_det_thresh.setRange(0.01, 1.0)
@@ -428,18 +448,18 @@ class QuickConvertPanel(QWidget):
         gse.addWidget(_hint("低于此值的印章文字识别结果被丢弃"))
 
         if not self._paddle_ok:
-            grp_seal.setEnabled(False)
-        adv.addWidget(grp_seal)
+            self._seal_group.setEnabled(False)
+        adv.addWidget(self._seal_group)
 
         # ─── 8. PDF 输入 ───
-        grp_pdf = QGroupBox("PDF 输入设置")
-        gpdf = QVBoxLayout(grp_pdf)
+        self._pdf_group = QGroupBox("PDF 输入设置")
+        gpdf = QVBoxLayout(self._pdf_group)
         self._dpi_spin = QSpinBox()
         self._dpi_spin.setRange(72, 600)
         self._dpi_spin.setValue(300)
         gpdf.addLayout(_spin_row("渲染 DPI：", self._dpi_spin))
         gpdf.addWidget(_hint("PDF 页面渲染为图片的分辨率。300 适合正常文档，扫描件可试 200 加速。最高 600"))
-        adv.addWidget(grp_pdf)
+        adv.addWidget(self._pdf_group)
 
         layout.addWidget(self._adv_widget)
         layout.addStretch()
@@ -448,6 +468,12 @@ class QuickConvertPanel(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(scroll)
+
+        self._pipeline_combo.currentIndexChanged.connect(self._refresh_runtime_options)
+        self._speed_combo.currentIndexChanged.connect(self._refresh_runtime_options)
+        self._lang_combo.currentIndexChanged.connect(self._refresh_runtime_options)
+        self._preserve_layout_check.toggled.connect(self._refresh_runtime_options)
+        self._refresh_runtime_options()
 
     # ── 事件处理 ──
 
@@ -460,22 +486,131 @@ class QuickConvertPanel(QWidget):
         except Exception:
             return False
 
+    @staticmethod
+    def _check_server_onnx() -> bool:
+        try:
+            from app.core.onnx_engine import onnx_available
+
+            return onnx_available("server")
+        except Exception:
+            return False
+
+    @staticmethod
+    def _supported_onnx_languages() -> tuple[str, ...]:
+        try:
+            from app.core.onnx_engine import supported_onnx_languages
+
+            return supported_onnx_languages()
+        except Exception:
+            return ("ch", "en")
+
+    def _effective_pipeline(self) -> str:
+        pipeline = self._pipeline_combo.currentData()
+        if pipeline in ("ocr", "structure"):
+            return pipeline
+        if self._selected_format in (OutputFormat.WORD, OutputFormat.HTML, OutputFormat.EXCEL):
+            return "structure" if self._paddle_ok else "ocr"
+        if (
+            self._selected_format in (OutputFormat.TXT, OutputFormat.RTF)
+            and self._preserve_layout_check.isEnabled()
+            and self._preserve_layout_check.isChecked()
+        ):
+            return "structure" if self._paddle_ok else "ocr"
+        return "ocr"
+
+    def _selected_is_pdf(self) -> bool:
+        return self._selected_file is not None and self._selected_file.suffix.lower() == ".pdf"
+
+    @staticmethod
+    def _set_enabled(widget, enabled: bool, tooltip: str | None = None) -> None:
+        widget.setEnabled(enabled)
+        if not enabled and hasattr(widget, "setChecked") and widget.isChecked():
+            widget.setChecked(False)
+        if tooltip:
+            widget.setToolTip(tooltip)
+
+    def _refresh_runtime_options(self) -> None:
+        effective_pipeline = self._effective_pipeline()
+        structure_active = effective_pipeline == "structure"
+        is_pdf = self._selected_is_pdf()
+
+        ocr_backend = None
+        if not structure_active:
+            try:
+                from app.core.onnx_engine import resolve_ocr_backend
+
+                ocr_backend = resolve_ocr_backend(
+                    self._lang_combo.currentData(),
+                    self._speed_combo.currentData(),
+                )
+            except Exception:
+                ocr_backend = None
+
+        onnx_ocr = (not structure_active) and ocr_backend == "onnx"
+
+        preserve_layout_enabled = self._paddle_ok and self._selected_format in (
+            OutputFormat.TXT,
+            OutputFormat.RTF,
+        )
+        self._set_enabled(
+            self._preserve_layout_check,
+            preserve_layout_enabled,
+            "仅 TXT/RTF 且结构化后端可用时生效",
+        )
+
+        structure_enabled = structure_active and self._paddle_ok
+        self._struct_group.setEnabled(structure_enabled)
+        self._layout_group.setEnabled(structure_enabled)
+        self._seal_group.setEnabled(structure_enabled)
+
+        self._set_enabled(
+            self._unwarp_check,
+            not onnx_ocr,
+            "当前 ONNX OCR 不支持文档弯曲矫正",
+        )
+        self._set_enabled(
+            self._return_word_box,
+            not onnx_ocr,
+            "当前 ONNX OCR 不返回单词级边框",
+        )
+
+        self._parallel_spin.setEnabled(is_pdf)
+        self._force_ocr_check.setEnabled(is_pdf)
+        self._page_start.setEnabled(is_pdf)
+        self._page_end.setEnabled(is_pdf)
+        self._pdf_group.setEnabled(is_pdf)
+
+        if structure_active:
+            self._backend_hint.setText("当前实际后端：PPStructureV3（需要 PaddlePaddle）")
+        elif onnx_ocr:
+            self._backend_hint.setText(
+                "当前实际后端：ONNX OCR。"
+                "方向检测、文本行方向、检测阈值、识别阈值、batch size 会生效；"
+                "弯曲矫正和单词级边框不可用。"
+            )
+        elif ocr_backend == "paddle":
+            self._backend_hint.setText("当前实际后端：PaddleOCR。所选 OCR 高级参数会传给 Paddle。")
+        else:
+            self._backend_hint.setText("当前环境缺少所选 OCR 后端，请调整语言或速度模式。")
+
     def _on_file_selected(self, path: Path) -> None:
         self._selected_file = path
         self._drop_zone.set_file_info(path)
         self._start_btn.setEnabled(True)
+        self._refresh_runtime_options()
 
     def _on_format_selected(self, fmt: OutputFormat) -> None:
         self._selected_format = fmt
         for card in self._cards:
             card.set_selected(card._fmt == fmt)
+        self._refresh_runtime_options()
 
     def _toggle_advanced(self) -> None:
         visible = not self._adv_widget.isVisible()
         self._adv_widget.setVisible(visible)
         self._adv_toggle.setText(
-            "▼ 高级选项（全部 PaddleOCR 参数）" if visible
-            else "▶ 高级选项（全部 PaddleOCR 参数）"
+            "▼ 高级选项（按当前引擎生效）" if visible
+            else "▶ 高级选项（按当前引擎生效）"
         )
 
     def _on_start(self) -> None:
@@ -491,10 +626,15 @@ class QuickConvertPanel(QWidget):
             "speed_mode": self._speed_combo.currentData(),
             # pipeline
             "pipeline": self._pipeline_combo.currentData(),
-            "preserve_layout": self._preserve_layout_check.isChecked(),
+            "preserve_layout": (
+                self._preserve_layout_check.isEnabled()
+                and self._preserve_layout_check.isChecked()
+            ),
             # 文档预处理
             "use_doc_orientation_classify": self._orientation_check.isChecked(),
-            "use_doc_unwarping": self._unwarp_check.isChecked(),
+            "use_doc_unwarping": (
+                self._unwarp_check.isEnabled() and self._unwarp_check.isChecked()
+            ),
             "use_textline_orientation": self._textline_ori_check.isChecked(),
             # 文本检测
             "text_det_limit_side_len": self._det_limit_side.value(),
@@ -505,28 +645,44 @@ class QuickConvertPanel(QWidget):
             # 文本识别
             "text_rec_score_thresh": self._rec_score_thresh.value(),
             "text_recognition_batch_size": self._rec_batch.value(),
-            "return_word_box": self._return_word_box.isChecked(),
+            "return_word_box": (
+                self._return_word_box.isEnabled() and self._return_word_box.isChecked()
+            ),
             # PPStructureV3 开关
-            "use_table_recognition": self._use_table.isChecked(),
-            "use_formula_recognition": self._use_formula.isChecked(),
-            "use_chart_recognition": self._use_chart.isChecked(),
-            "use_seal_recognition": self._use_seal.isChecked(),
-            "use_region_detection": self._use_region_det.isChecked(),
+            "use_table_recognition": (
+                self._struct_group.isEnabled() and self._use_table.isChecked()
+            ),
+            "use_formula_recognition": (
+                self._struct_group.isEnabled() and self._use_formula.isChecked()
+            ),
+            "use_chart_recognition": (
+                self._struct_group.isEnabled() and self._use_chart.isChecked()
+            ),
+            "use_seal_recognition": (
+                self._struct_group.isEnabled() and self._use_seal.isChecked()
+            ),
+            "use_region_detection": (
+                self._struct_group.isEnabled() and self._use_region_det.isChecked()
+            ),
             # 版面分析
-            "layout_threshold": self._layout_thresh.value(),
-            "layout_nms": self._layout_nms.value(),
-            "layout_unclip_ratio": self._layout_unclip.value() or None,
-            "layout_merge_bboxes_mode": self._layout_merge.currentData() or None,
+            "layout_threshold": self._layout_thresh.value() if self._layout_group.isEnabled() else None,
+            "layout_nms": self._layout_nms.value() if self._layout_group.isEnabled() else None,
+            "layout_unclip_ratio": (
+                self._layout_unclip.value() or None
+            ) if self._layout_group.isEnabled() else None,
+            "layout_merge_bboxes_mode": (
+                self._layout_merge.currentData() or None
+            ) if self._layout_group.isEnabled() else None,
             # 印章
-            "seal_det_thresh": self._seal_det_thresh.value(),
-            "seal_det_box_thresh": self._seal_box_thresh.value(),
-            "seal_det_unclip_ratio": self._seal_unclip.value(),
-            "seal_rec_score_thresh": self._seal_rec_thresh.value(),
+            "seal_det_thresh": self._seal_det_thresh.value() if self._seal_group.isEnabled() else None,
+            "seal_det_box_thresh": self._seal_box_thresh.value() if self._seal_group.isEnabled() else None,
+            "seal_det_unclip_ratio": self._seal_unclip.value() if self._seal_group.isEnabled() else None,
+            "seal_rec_score_thresh": self._seal_rec_thresh.value() if self._seal_group.isEnabled() else None,
             # PDF
             "render_dpi": self._dpi_spin.value(),
             # 并行 + PDF
             "parallel_workers": self._parallel_spin.value(),
-            "force_ocr": self._force_ocr_check.isChecked(),
+            "force_ocr": self._force_ocr_check.isEnabled() and self._force_ocr_check.isChecked(),
             "page_start": self._page_start.value(),
             "page_end": self._page_end.value(),
         }

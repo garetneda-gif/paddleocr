@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
+import os
 import tempfile
 from pathlib import Path
 
 RENDER_DPI = 200
+
+
+def _safe_temp_path(*, suffix: str, prefix: str) -> Path:
+    fd, name = tempfile.mkstemp(suffix=suffix, prefix=prefix)
+    os.close(fd)
+    return Path(name)
 
 
 def has_text_layer(pdf_path: Path, sample_pages: int = 5) -> bool:
@@ -14,6 +21,9 @@ def has_text_layer(pdf_path: Path, sample_pages: int = 5) -> bool:
     doc = fitz.open(str(pdf_path))
     pages_with_text = 0
     check_count = min(sample_pages, len(doc))
+    if check_count == 0:
+        doc.close()
+        return False
     for i in range(check_count):
         text = doc[i].get_text().strip()
         if len(text) > 20:  # 至少 20 字符才算有文字层
@@ -57,7 +67,7 @@ def render_page(pdf_path: Path, page_index: int, dpi: int = RENDER_DPI) -> Path:
     mat = fitz.Matrix(zoom, zoom)
     pix = page.get_pixmap(matrix=mat)
 
-    tmp = Path(tempfile.mktemp(suffix=f"_p{page_index:04d}.png", prefix="pocr_"))
+    tmp = _safe_temp_path(suffix=f"_p{page_index:04d}.png", prefix="pocr_")
     pix.save(str(tmp))
 
     pix = None

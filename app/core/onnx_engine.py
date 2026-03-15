@@ -1,4 +1,4 @@
-"""ONNX Runtime OCR 引擎 — 完全替换 PaddlePaddle，更快更省内存。
+"""ONNX Runtime OCR 引擎。
 
 实现 DB 文本检测 + CRNN 文本识别的完整前后处理。
 使用预转换的 PP-OCRv5 ONNX 模型，无需安装 PaddlePaddle。
@@ -17,6 +17,20 @@ from app.models import BlockResult, BlockType, DocumentResult, PageResult
 _EXTERNAL_ONNX_DIR = Path("/Volumes/MOVESPEED/存储/models/onnx")
 _INTERNAL_ONNX_DIR = Path.home() / ".paddlex" / "onnx_models"
 _CHAR_DICT_PATH = Path("/Volumes/MOVESPEED/存储/models/ppocr_keys_v5.txt")
+_ONNX_LANGUAGES = ("ch", "en")
+_ONNX_OCR_OPTIONS = frozenset(
+    {
+        "use_doc_orientation_classify",
+        "use_textline_orientation",
+        "text_det_limit_side_len",
+        "text_det_limit_type",
+        "text_det_thresh",
+        "text_det_box_thresh",
+        "text_det_unclip_ratio",
+        "text_recognition_batch_size",
+        "text_rec_score_thresh",
+    }
+)
 
 
 def _resources_dir() -> Path:
@@ -91,6 +105,39 @@ def onnx_available(speed_mode: str = "mobile") -> bool:
     )
 
 
+def supported_onnx_languages() -> tuple[str, ...]:
+    return _ONNX_LANGUAGES
+
+
+def onnx_supports_language(lang: str) -> bool:
+    return lang in _ONNX_LANGUAGES
+
+
+def supported_onnx_ocr_options() -> frozenset[str]:
+    return _ONNX_OCR_OPTIONS
+
+
+def resolve_ocr_backend(lang: str, speed_mode: str) -> str:
+    """根据当前环境和语言选择 OCR 后端。"""
+    if onnx_available(speed_mode):
+        if onnx_supports_language(lang):
+            return "onnx"
+        if paddle_available():
+            return "paddle"
+        raise RuntimeError(
+            "当前 ONNX Runtime 版仅支持中文和英文。"
+            f"所选语言 `{lang}` 需要安装 Paddle OCR 后端。"
+        )
+
+    if paddle_available():
+        return "paddle"
+
+    raise RuntimeError(
+        f"未找到可用的 OCR 后端。speed_mode={speed_mode} 缺少 ONNX 模型，"
+        "同时 PaddlePaddle 也未安装。"
+    )
+
+
 def _load_char_dict() -> list[str]:
     """从 ppocr_keys_v5.txt 加载字符字典。"""
     candidates = [
@@ -114,7 +161,16 @@ def _load_char_dict() -> list[str]:
 class DBDetector:
     """DB 文本检测器（PP-OCRv5）。"""
 
-    def __init__(self, onnx_path: Path) -> None:
+    def __init__(
+        self,
+        onnx_path: Path,
+        *,
+        limit_side_len: int = 960,
+        limit_type: str = "max",
+        thresh: float = 0.3,
+        box_thresh: float = 0.6,
+        unclip_ratio: float = 1.5,
+    ) -> None:
         import onnxruntime as ort
 
         self.session = ort.InferenceSession(
@@ -122,11 +178,12 @@ class DBDetector:
             providers=["CPUExecutionProvider"],
         )
         self.input_name = self.session.get_inputs()[0].name
-        self.thresh = 0.3
-        self.box_thresh = 0.6
-        self.unclip_ratio = 1.5
+        self.thresh = float(thresh)
+        self.box_thresh = float(box_thresh)
+        self.unclip_ratio = float(unclip_ratio)
         self.max_candidates = 1000
-        self.limit_side_len = 960
+        self.limit_side_len = max(32, int(limit_side_len))
+        self.limit_type = "min" if limit_type == "min" else "max"
 
     def detect(self, img: np.ndarray) -> list[np.ndarray]:
         """检测文本区域，返回四点多边形列表。"""
@@ -139,7 +196,10 @@ class DBDetector:
     def _preprocess(self, img: np.ndarray) -> tuple[np.ndarray, float, float]:
         h, w = img.shape[:2]
         ratio = 1.0
-        if max(h, w) > self.limit_side_len:
+        if self.limit_type == "min":
+            if min(h, w) > 0:
+                ratio = self.limit_side_len / min(h, w)
+        elif max(h, w) > self.limit_side_len:
             ratio = self.limit_side_len / max(h, w)
         new_h = max(int(h * ratio / 32) * 32, 32)
         new_w = max(int(w * ratio / 32) * 32, 32)
@@ -240,7 +300,13 @@ class DBDetector:
 class CRNNRecognizer:
     """CRNN 文本识别器 + CTC 贪心解码。"""
 
-    def __init__(self, onnx_path: Path) -> None:
+    def __init__(
+        self,
+        onnx_path: Path,
+        *,
+        batch_size: int = 1,
+        use_textline_orientation: bool = False,
+    ) -> None:
         import onnxruntime as ort
 
         self.session = ort.InferenceSession(
@@ -250,19 +316,39 @@ class CRNNRecognizer:
         self.input_name = self.session.get_inputs()[0].name
         self.char_dict = _load_char_dict()
         self.rec_image_shape = (3, 48, 320)
+        self.batch_size = max(1, int(batch_size))
+        self.use_textline_orientation = bool(use_textline_orientation)
+        batch_dim = self.session.get_inputs()[0].shape[0]
+        self._supports_batched_infer = not isinstance(batch_dim, int) or batch_dim != 1
 
     def recognize(self, img: np.ndarray, boxes: list[np.ndarray]) -> list[tuple[str, float]]:
         """识别所有文本框，返回 [(text, score), ...]。"""
         if not boxes:
             return []
 
-        results = []
-        for box in boxes:
-            crop = self._crop_and_resize(img, box)
-            inp = self._preprocess(crop)
-            outputs = self.session.run(None, {self.input_name: inp})
-            text, score = self._ctc_decode(outputs[0])
-            results.append((text, score))
+        inputs = [self._preprocess(self._crop_and_resize(img, box)) for box in boxes]
+        results: list[tuple[str, float]] = []
+
+        if self.batch_size == 1:
+            for inp in inputs:
+                outputs = self.session.run(None, {self.input_name: inp})
+                results.extend(self._ctc_decode_batch(outputs[0]))
+            return results
+
+        for start in range(0, len(inputs), self.batch_size):
+            chunk = inputs[start:start + self.batch_size]
+            if self._supports_batched_infer:
+                try:
+                    batch = np.concatenate(chunk, axis=0)
+                    outputs = self.session.run(None, {self.input_name: batch})
+                    results.extend(self._ctc_decode_batch(outputs[0]))
+                    continue
+                except Exception:
+                    self._supports_batched_infer = False
+
+            for inp in chunk:
+                outputs = self.session.run(None, {self.input_name: inp})
+                results.extend(self._ctc_decode_batch(outputs[0]))
         return results
 
     def _crop_and_resize(self, img: np.ndarray, box: np.ndarray) -> np.ndarray:
@@ -283,6 +369,8 @@ class CRNNRecognizer:
         dst = np.array([[0, 0], [w, 0], [w, h], [0, h]], dtype=np.float32)
         M = cv2.getPerspectiveTransform(box.astype(np.float32), dst)
         crop = cv2.warpPerspective(img, M, (w, h))
+        if self.use_textline_orientation and crop.shape[0] > crop.shape[1] * 1.2:
+            crop = cv2.rotate(crop, cv2.ROTATE_90_CLOCKWISE)
         return crop
 
     def _preprocess(self, crop: np.ndarray) -> np.ndarray:
@@ -307,26 +395,27 @@ class CRNNRecognizer:
         # HWC → CHW，加 batch 维
         return padded.transpose(2, 0, 1)[np.newaxis, ...].astype(np.float32)
 
-    def _ctc_decode(self, output: np.ndarray) -> tuple[str, float]:
+    def _ctc_decode_batch(self, output: np.ndarray) -> list[tuple[str, float]]:
         """CTC 贪心解码。"""
-        preds = output[0]  # (T, vocab_size)
-        pred_indices = preds.argmax(axis=1)
-        pred_scores = preds.max(axis=1)
+        results: list[tuple[str, float]] = []
+        for preds in output:
+            pred_indices = preds.argmax(axis=1)
+            pred_scores = preds.max(axis=1)
 
-        chars = []
-        scores = []
-        prev_idx = 0  # blank
+            chars = []
+            scores = []
+            prev_idx = 0  # blank
 
-        for i, idx in enumerate(pred_indices):
-            if idx != 0 and idx != prev_idx:
-                if idx < len(self.char_dict):
+            for i, idx in enumerate(pred_indices):
+                if idx != 0 and idx != prev_idx and idx < len(self.char_dict):
                     chars.append(self.char_dict[idx])
                     scores.append(float(pred_scores[i]))
-            prev_idx = idx
+                prev_idx = idx
 
-        text = "".join(chars)
-        avg_score = float(np.mean(scores)) if scores else 0.0
-        return text, avg_score
+            text = "".join(chars)
+            avg_score = float(np.mean(scores)) if scores else 0.0
+            results.append((text, avg_score))
+        return results
 
 
 # ═══════════════════════════════════════════════════════
@@ -342,13 +431,20 @@ class OnnxOCREngine:
         speed_mode: str = "server",
         options: dict[str, object] | None = None,
     ) -> None:
+        self._lang = lang
         self._speed_mode = speed_mode
+        self._options = {k: v for k, v in (options or {}).items() if v is not None}
         self._detector: DBDetector | None = None
         self._recognizer: CRNNRecognizer | None = None
 
     def _ensure_model(self) -> None:
         if self._detector is not None:
             return
+        if not onnx_supports_language(self._lang):
+            raise ValueError(
+                "当前 ONNX Runtime OCR 仅支持中文和英文，"
+                f"收到不支持的语言代码：{self._lang}"
+            )
 
         onnx_dir = _find_onnx_dir()
         if onnx_dir is None:
@@ -364,8 +460,53 @@ class OnnxOCREngine:
         if not rec_path.exists():
             raise FileNotFoundError(f"识别模型不存在: {rec_path}")
 
-        self._detector = DBDetector(det_path)
-        self._recognizer = CRNNRecognizer(rec_path)
+        self._detector = DBDetector(
+            det_path,
+            limit_side_len=int(self._options.get("text_det_limit_side_len", 960)),
+            limit_type=str(self._options.get("text_det_limit_type", "max")),
+            thresh=float(self._options.get("text_det_thresh", 0.3)),
+            box_thresh=float(self._options.get("text_det_box_thresh", 0.6)),
+            unclip_ratio=float(self._options.get("text_det_unclip_ratio", 1.5)),
+        )
+        self._recognizer = CRNNRecognizer(
+            rec_path,
+            batch_size=int(self._options.get("text_recognition_batch_size", 1)),
+            use_textline_orientation=bool(
+                self._options.get("use_textline_orientation", False)
+            ),
+        )
+
+    @staticmethod
+    def _rotate_image(img: np.ndarray, angle: int) -> np.ndarray:
+        if angle == 90:
+            return cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
+        if angle == 180:
+            return cv2.rotate(img, cv2.ROTATE_180)
+        if angle == 270:
+            return cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        return img
+
+    def _auto_rotate_image(self, img: np.ndarray) -> np.ndarray:
+        candidates = [0, 90, 180, 270]
+        best_img = img
+        best_score = (-1.0, -1.0)
+
+        for angle in candidates:
+            rotated = self._rotate_image(img, angle)
+            boxes = self._detector.detect(rotated)
+            if not boxes:
+                continue
+            boxes.sort(key=lambda b: (b[:, 1].min(), b[:, 0].min()))
+            preview = self._recognizer.recognize(rotated, boxes[: min(5, len(boxes))])
+            mean_score = (
+                sum(score for _, score in preview) / len(preview) if preview else 0.0
+            )
+            score = (mean_score, float(len(boxes)))
+            if score > best_score:
+                best_score = score
+                best_img = rotated
+
+        return best_img
 
     def predict(self, image_path: Path) -> DocumentResult:
         """与 OCREngine.predict() 接口一致。"""
@@ -376,6 +517,9 @@ class OnnxOCREngine:
             return DocumentResult(
                 source_path=image_path, page_count=1, pages=[], plain_text=""
             )
+
+        if self._options.get("use_doc_orientation_classify"):
+            img = self._auto_rotate_image(img)
 
         h, w = img.shape[:2]
 
@@ -391,8 +535,11 @@ class OnnxOCREngine:
         # 构建结果
         blocks = []
         texts = []
+        score_thresh = float(self._options.get("text_rec_score_thresh", 0.0))
         for box, (text, score) in zip(boxes, results):
             if not text.strip():
+                continue
+            if score < score_thresh:
                 continue
             x1, y1 = float(box[:, 0].min()), float(box[:, 1].min())
             x2, y2 = float(box[:, 0].max()), float(box[:, 1].max())

@@ -74,6 +74,19 @@ class TestRtfConverter:
         assert r"\rtf1" in content
         assert "Test Title" in content
 
+    def test_fallback_plain_text(self, tmp_path):
+        result = DocumentResult(
+            source_path=Path("/tmp/test.pdf"),
+            page_count=1,
+            pages=[],
+            plain_text="Fallback line 1\nFallback line 2",
+        )
+        out = tmp_path / "fallback.rtf"
+        RtfConverter().convert(result, out)
+        content = out.read_text()
+        assert "Fallback line 1" in content
+        assert "Fallback line 2" in content
+
 
 class TestWordConverter:
     def test_creates_file(self, sample_result, tmp_path):

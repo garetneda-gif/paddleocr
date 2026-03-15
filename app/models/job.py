@@ -11,3 +11,4 @@ class OCRJob:
     language: str = "ch"
     enable_preprocess: bool = False
     preserve_layout: bool = False
+    _adv_params: dict[str, object] = field(default_factory=dict)

@@ -72,17 +72,12 @@ def _subprocess_batch_worker(args_json: str) -> str:
                 }))
                 return out_path
         else:
-            # 优先 ONNX 引擎（无需 PaddlePaddle，更快更省内存）
-            engine = None
-            try:
-                from app.core.onnx_engine import OnnxOCREngine, onnx_available
+            from app.core.onnx_engine import OnnxOCREngine, resolve_ocr_backend
 
-                if onnx_available(speed_mode):
-                    engine = OnnxOCREngine(lang=lang, speed_mode=speed_mode, options=options)
-            except Exception:
-                pass
-
-            if engine is None:
+            backend = resolve_ocr_backend(lang, speed_mode)
+            if backend == "onnx":
+                engine = OnnxOCREngine(lang=lang, speed_mode=speed_mode, options=options)
+            else:
                 from app.core.ocr_engine import OCREngine
 
                 engine = OCREngine(lang=lang, speed_mode=speed_mode, options=options)

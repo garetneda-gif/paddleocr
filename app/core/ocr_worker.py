@@ -34,7 +34,9 @@ def _resolve_pipeline(job: OCRJob) -> str:
     if pipeline == "ocr":
         return "ocr"
     if pipeline == "structure":
-        return "structure" if paddle_available() else "ocr"
+        if paddle_available():
+            return "structure"
+        raise RuntimeError("PPStructureV3 需要 PaddlePaddle，当前环境不可用。")
 
     # auto 模式
     if job.output_format in (OutputFormat.WORD, OutputFormat.HTML, OutputFormat.EXCEL):
@@ -189,7 +191,14 @@ class OCRWorker(QThread):
         dpi = _auto_dpi(actual, user_dpi)
         speed_mode = _get_adv(job, "speed_mode", "server")
         max_workers = max(1, int(_get_adv(job, "parallel_workers", 2)))
-        pipeline_label = "PPStructureV3" if pipeline == "structure" else "PP-OCRv5"
+        if pipeline == "structure":
+            backend = "paddle"
+            pipeline_label = "PPStructureV3"
+        else:
+            from app.core.onnx_engine import resolve_ocr_backend
+
+            backend = resolve_ocr_backend(job.language, speed_mode)
+            pipeline_label = "ONNX OCR" if backend == "onnx" else "PaddleOCR"
         options = (
             _structure_options(job, speed_mode)
             if pipeline == "structure"

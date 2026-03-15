@@ -20,15 +20,29 @@ class RtfConverter(BaseConverter):
             r"\f0\fs24",
             "",
         ]
+        has_content = False
 
         for page in result.pages:
             for block in page.blocks:
                 text = block.text.replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}")
+                if not text:
+                    continue
                 if block.block_type == BlockType.TITLE:
                     lines.append(rf"\pard\b\fs32 {text}\b0\fs24\par")
                 else:
                     lines.append(rf"\pard {text}\par")
-            lines.append(r"\page")
+                has_content = True
+            if page.blocks:
+                lines.append(r"\page")
+
+        if not has_content and result.plain_text:
+            for line in result.plain_text.splitlines():
+                text = line.strip()
+                if not text:
+                    continue
+                text = text.replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}")
+                lines.append(rf"\pard {text}\par")
+                has_content = True
 
         # 移除最后一个多余的 \page
         if lines and lines[-1] == r"\page":

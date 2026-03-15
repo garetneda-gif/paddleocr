@@ -8,6 +8,8 @@ from PyInstaller.utils.hooks import collect_all, collect_submodules, collect_dat
 
 block_cipher = None
 ROOT = Path(SPECPATH).parent
+EXTERNAL_ONNX_DIR = Path("/Volumes/MOVESPEED/存储/models/onnx")
+EXTERNAL_CHAR_DICT = Path("/Volumes/MOVESPEED/存储/models/ppocr_keys_v5.txt")
 
 
 def _drop_nested_app_bundles(items):
@@ -19,6 +21,14 @@ def _drop_nested_app_bundles(items):
             continue
         filtered.append((src, dest))
     return filtered
+
+
+def _optional_data(src: Path, dest: str):
+    return [(str(src), dest)] if src.exists() else []
+
+
+def _optional_data_if_missing(src: Path, dest: str, existing: Path):
+    return [(str(src), dest)] if src.exists() and not existing.exists() else []
 
 # ---- ONNX Runtime（替代 PaddlePaddle） ----
 onnx_datas, onnx_bins, onnx_hi = collect_all('onnxruntime')
@@ -50,6 +60,13 @@ all_datas = (
     onnx_datas + pyside_datas + cv2_datas
     + pyclipper_d + shapely_d
     + [(str(ROOT / "resources"), "resources")]
+    + _optional_data(EXTERNAL_ONNX_DIR / "PP-OCRv5_server_det.onnx", "resources/models/onnx")
+    + _optional_data(EXTERNAL_ONNX_DIR / "PP-OCRv5_server_rec.onnx", "resources/models/onnx")
+    + _optional_data_if_missing(
+        EXTERNAL_CHAR_DICT,
+        "resources/models",
+        ROOT / "resources" / "models" / "ppocr_keys_v5.txt",
+    )
 )
 all_binaries = (
     onnx_bins + pyside_bins + cv2_bins
