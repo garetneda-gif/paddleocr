@@ -63,7 +63,8 @@ class PdfConverter(BaseConverter):
                     block.text,
                     fontsize=fontsize,
                     color=(0, 0, 0),
-                    opacity=0,  # 透明文字层
+                    stroke_opacity=0,
+                    fill_opacity=0,  # 透明文字层
                 )
 
         if src_doc:

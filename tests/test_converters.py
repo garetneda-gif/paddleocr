@@ -1,6 +1,7 @@
 """导出器单元测试 — 使用构造的 DocumentResult，不依赖 PaddleOCR。"""
 
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,7 @@ from app.converters.rtf_converter import RtfConverter
 from app.converters.word_converter import WordConverter
 from app.converters.html_converter import HtmlConverter
 from app.converters.excel_converter import ExcelConverter
+from app.converters.pdf_converter import PdfConverter
 
 
 @pytest.fixture
@@ -180,3 +182,15 @@ class TestExcelConverter:
         from openpyxl import load_workbook
         wb = load_workbook(str(out))
         assert "OCR Text" in wb.sheetnames
+
+
+class TestPdfConverter:
+    def test_creates_searchable_pdf(self, sample_result, tmp_path):
+        result = replace(
+            sample_result,
+            source_path=Path(__file__).parent / "fixtures" / "test_en.png",
+        )
+        out = tmp_path / "out.pdf"
+        PdfConverter().convert(result, out)
+        assert out.exists()
+        assert out.stat().st_size > 0
