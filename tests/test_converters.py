@@ -194,3 +194,53 @@ class TestPdfConverter:
         PdfConverter().convert(result, out)
         assert out.exists()
         assert out.stat().st_size > 0
+
+    def test_text_layer_is_extractable(self, sample_result, tmp_path):
+        """文字层必须可被 PDF 阅读器提取（可选取/复制）。"""
+        import fitz
+
+        result = replace(
+            sample_result,
+            source_path=Path(__file__).parent / "fixtures" / "test_en.png",
+        )
+        out = tmp_path / "out.pdf"
+        PdfConverter().convert(result, out)
+
+        doc = fitz.open(str(out))
+        text = doc[0].get_text()
+        doc.close()
+        assert "Test Title" in text
+        assert "paragraph" in text
+
+    def test_cjk_text_layer(self, tmp_path):
+        """中文文字层不能变成问号，必须保留原始 Unicode。"""
+        import fitz
+
+        cjk_result = DocumentResult(
+            source_path=Path(__file__).parent / "fixtures" / "test_en.png",
+            page_count=1,
+            pages=[
+                PageResult(
+                    page_index=0,
+                    width=800,
+                    height=400,
+                    blocks=[
+                        BlockResult(
+                            block_type=BlockType.PARAGRAPH,
+                            bbox=(10.0, 10.0, 400.0, 50.0),
+                            text="测试中文文本层",
+                            confidence=0.95,
+                        ),
+                    ],
+                )
+            ],
+            plain_text="测试中文文本层",
+        )
+        out = tmp_path / "cjk.pdf"
+        PdfConverter().convert(cjk_result, out)
+
+        doc = fitz.open(str(out))
+        text = doc[0].get_text()
+        doc.close()
+        assert "?" not in text, f"CJK text corrupted to question marks: {text!r}"
+        assert "测试中文文本层" in text
