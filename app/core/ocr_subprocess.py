@@ -109,9 +109,11 @@ def _subprocess_batch_worker(args_json: str) -> str:
                 from app.core.structure_engine import StructureEngine
 
                 engine = StructureEngine(lang=lang, options=options)
-            except ImportError:
+            except Exception as exc:
+                import traceback
+                tb = traceback.format_exc()
                 Path(out_path).write_text(json.dumps({
-                    "error": "结构化解析（PPStructureV3）需要 PaddlePaddle，当前环境不可用。请使用 TXT/PDF/RTF 格式输出。"
+                    "error": f"PPStructureV3 初始化失败：{exc}\n\n{tb}"
                 }))
                 return out_path
         else:
@@ -132,7 +134,9 @@ def _subprocess_batch_worker(args_json: str) -> str:
 
         Path(out_path).write_text(json.dumps(all_results, ensure_ascii=False))
     except Exception as e:
-        Path(out_path).write_text(json.dumps({"error": str(e)}))
+        import traceback
+        tb = traceback.format_exc()
+        Path(out_path).write_text(json.dumps({"error": f"{e}\n\n{tb}"}))
 
     return out_path
 

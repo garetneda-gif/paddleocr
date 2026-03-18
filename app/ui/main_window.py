@@ -259,7 +259,19 @@ class MainWindow(QMainWindow):
         if self._progress_dialog:
             self._progress_dialog.close()
             self._progress_dialog = None
-        QMessageBox.warning(self, "处理出错", msg)
+        from PySide6.QtWidgets import QTextEdit, QDialog, QVBoxLayout, QDialogButtonBox
+        dlg = QDialog(self)
+        dlg.setWindowTitle("处理出错")
+        dlg.setMinimumSize(600, 320)
+        layout = QVBoxLayout(dlg)
+        te = QTextEdit()
+        te.setReadOnly(True)
+        te.setPlainText(msg)
+        layout.addWidget(te)
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
+        bb.accepted.connect(dlg.accept)
+        layout.addWidget(bb)
+        dlg.exec()
 
     def _on_cancel(self) -> None:
         if self._worker:

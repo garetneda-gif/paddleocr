@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
-# PyInstaller spec — PaddleOCR macOS 桌面应用（ONNX Runtime 版）
-# 用法: cd /Users/jikunren/Documents/paddleocr && source .venv/bin/activate && pyinstaller packaging/pyinstaller.spec
+# PyInstaller spec — PaddleOCR macOS 桌面应用（ONNX + PaddlePaddle 双后端）
+# 用法: .venv/bin/python -m PyInstaller packaging/pyinstaller.spec --noconfirm
 
 import sys
 from pathlib import Path
@@ -30,8 +30,23 @@ def _optional_data(src: Path, dest: str):
 def _optional_data_if_missing(src: Path, dest: str, existing: Path):
     return [(str(src), dest)] if src.exists() and not existing.exists() else []
 
-# ---- ONNX Runtime（替代 PaddlePaddle） ----
+
+def _safe_collect_all(pkg):
+    """collect_all 的安全包装，失败时返回空列表。"""
+    try:
+        d, b, h = collect_all(pkg)
+        return d, b, h
+    except Exception:
+        return [], [], []
+
+
+# ---- ONNX Runtime ----
 onnx_datas, onnx_bins, onnx_hi = collect_all('onnxruntime')
+
+# ---- PaddlePaddle（可选后端，用于 PPStructureV3） ----
+paddle_datas, paddle_bins, paddle_hi = _safe_collect_all('paddle')
+paddlex_datas, paddlex_bins, paddlex_hi = _safe_collect_all('paddlex')
+paddleocr_datas, paddleocr_bins, paddleocr_hi = _safe_collect_all('paddleocr')
 
 # PySide6 Qt 插件、翻译等
 pyside_datas, pyside_bins, pyside_hi = collect_all('PySide6')
@@ -54,11 +69,15 @@ extra_hi = (
     + collect_submodules('PIL')
     + collect_submodules('numpy')
     + collect_submodules('yaml')
+    + collect_submodules('google.protobuf')
+    + collect_submodules('httpx')
+    + collect_submodules('filelock')
 )
 
 all_datas = (
     onnx_datas + pyside_datas + cv2_datas
     + pyclipper_d + shapely_d
+    + paddle_datas + paddlex_datas + paddleocr_datas
     + [(str(ROOT / "resources"), "resources")]
     + _optional_data(EXTERNAL_ONNX_DIR / "PP-OCRv5_server_det.onnx", "resources/models/onnx")
     + _optional_data(EXTERNAL_ONNX_DIR / "PP-OCRv5_server_rec.onnx", "resources/models/onnx")
@@ -71,10 +90,12 @@ all_datas = (
 all_binaries = (
     onnx_bins + pyside_bins + cv2_bins
     + pyclipper_b + shapely_b
+    + paddle_bins + paddlex_bins + paddleocr_bins
 )
 all_hiddenimports = (
     onnx_hi + pyside_hi + cv2_hi
     + pyclipper_h + shapely_h + extra_hi
+    + paddle_hi + paddlex_hi + paddleocr_hi
     + ['app', 'app.models', 'app.core', 'app.converters', 'app.ui', 'app.utils']
 )
 
@@ -88,7 +109,7 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=['tkinter', 'matplotlib', 'IPython', 'notebook', 'jupyter',
-              'paddle', 'paddleocr', 'paddlex', 'transformers', 'tokenizers'],
+              'transformers', 'tokenizers'],
     noarchive=False,
 )
 
@@ -130,7 +151,7 @@ app = BUNDLE(
     bundle_identifier="com.paddleocr.desktop",
     info_plist={
         "CFBundleDisplayName": "PaddleOCR",
-        "CFBundleShortVersionString": "2.0.0",
+        "CFBundleShortVersionString": "2.1.0",
         "NSHighResolutionCapable": True,
         "LSMinimumSystemVersion": "11.0",
     },
