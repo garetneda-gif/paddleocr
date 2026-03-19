@@ -48,6 +48,11 @@ paddle_datas, paddle_bins, paddle_hi = _safe_collect_all('paddle')
 paddlex_datas, paddlex_bins, paddlex_hi = _safe_collect_all('paddlex')
 paddleocr_datas, paddleocr_bins, paddleocr_hi = _safe_collect_all('paddleocr')
 
+# ---- PPStructureV3 额外依赖 ----
+pypdfium2_d, pypdfium2_b, pypdfium2_h = _safe_collect_all('pypdfium2')
+tiktoken_d, tiktoken_b, tiktoken_h = _safe_collect_all('tiktoken')
+sentencepiece_d, sentencepiece_b, sentencepiece_h = _safe_collect_all('sentencepiece')
+
 # PySide6 Qt 插件、翻译等
 pyside_datas, pyside_bins, pyside_hi = collect_all('PySide6')
 pyside_datas = _drop_nested_app_bundles(pyside_datas)
@@ -72,12 +77,22 @@ extra_hi = (
     + collect_submodules('google.protobuf')
     + collect_submodules('httpx')
     + collect_submodules('filelock')
+    + collect_submodules('pypdfium2')
+    + collect_submodules('tiktoken')
+    + collect_submodules('sentencepiece')
+    + collect_submodules('regex')
+    + collect_submodules('bs4')
+    + collect_submodules('einops')
+    + collect_submodules('scipy')
+    + collect_submodules('sklearn')
+    + collect_submodules('safetensors')
 )
 
 all_datas = (
     onnx_datas + pyside_datas + cv2_datas
     + pyclipper_d + shapely_d
     + paddle_datas + paddlex_datas + paddleocr_datas
+    + pypdfium2_d + tiktoken_d + sentencepiece_d
     + [(str(ROOT / "resources"), "resources")]
     + _optional_data(EXTERNAL_ONNX_DIR / "PP-OCRv5_server_det.onnx", "resources/models/onnx")
     + _optional_data(EXTERNAL_ONNX_DIR / "PP-OCRv5_server_rec.onnx", "resources/models/onnx")
@@ -91,11 +106,13 @@ all_binaries = (
     onnx_bins + pyside_bins + cv2_bins
     + pyclipper_b + shapely_b
     + paddle_bins + paddlex_bins + paddleocr_bins
+    + pypdfium2_b + tiktoken_b + sentencepiece_b
 )
 all_hiddenimports = (
     onnx_hi + pyside_hi + cv2_hi
     + pyclipper_h + shapely_h + extra_hi
     + paddle_hi + paddlex_hi + paddleocr_hi
+    + pypdfium2_h + tiktoken_h + sentencepiece_h
     + ['app', 'app.models', 'app.core', 'app.converters', 'app.ui', 'app.utils']
 )
 

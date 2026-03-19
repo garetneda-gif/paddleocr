@@ -53,6 +53,8 @@ class StructureEngine:
             import paddlex.utils.deps as _pdx_deps
             _pdx_deps.is_extra_available = lambda *a, **k: True
             _pdx_deps.require_extra = lambda *a, **k: None
+            _pdx_deps.is_dep_available = lambda *a, **k: True
+            _pdx_deps.require_deps = lambda *a, **k: None
         except Exception:
             pass
 
