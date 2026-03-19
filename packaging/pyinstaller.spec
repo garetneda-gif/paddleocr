@@ -27,9 +27,9 @@ def _drop_cv2_ssl_conflict(items):
     """移除 cv2 自带的 libcrypto/libssl，防止与 Python _ssl 冲突。"""
     filtered = []
     for entry in items:
-        src = entry[0] if isinstance(entry, tuple) else entry
-        name = src.rsplit("/", 1)[-1] if "/" in src else src
-        if "cv2" in src and ("libcrypto" in name or "libssl" in name):
+        parts = [str(p) for p in (entry if isinstance(entry, tuple) else [entry])]
+        combined = " ".join(parts).lower()
+        if "cv2" in combined and ("libcrypto" in combined or "libssl" in combined):
             continue
         filtered.append(entry)
     return filtered
@@ -188,3 +188,11 @@ app = BUNDLE(
         "LSMinimumSystemVersion": "11.0",
     },
 )
+
+# ---- 后处理：清除 cv2 自带的 libcrypto/libssl（与 Python _ssl 冲突） ----
+import glob
+_app_path = os.path.join(DISTPATH, "PaddleOCR.app")
+for _pat in ["**/cv2*dylibs/libcrypto*", "**/cv2*dylibs/libssl*"]:
+    for _f in glob.glob(os.path.join(_app_path, _pat), recursive=True):
+        os.remove(_f)
+        print(f"POST-BUILD: removed conflicting {_f}")
