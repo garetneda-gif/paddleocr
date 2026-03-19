@@ -23,6 +23,18 @@ def _drop_nested_app_bundles(items):
     return filtered
 
 
+def _drop_cv2_ssl_conflict(items):
+    """移除 cv2 自带的 libcrypto/libssl，防止与 Python _ssl 冲突。"""
+    filtered = []
+    for entry in items:
+        src = entry[0] if isinstance(entry, tuple) else entry
+        name = src.rsplit("/", 1)[-1] if "/" in src else src
+        if "cv2" in src and ("libcrypto" in name or "libssl" in name):
+            continue
+        filtered.append(entry)
+    return filtered
+
+
 def _optional_data(src: Path, dest: str):
     return [(str(src), dest)] if src.exists() else []
 
@@ -60,6 +72,9 @@ pyside_bins = _drop_nested_app_bundles(pyside_bins)
 
 # OpenCV 需要 collect_all 以包含 .so/.dylib
 cv2_datas, cv2_bins, cv2_hi = collect_all('cv2')
+# 移除 cv2 自带的 libcrypto/libssl（与 Python _ssl 冲突导致 HTTPS 不可用）
+cv2_datas = _drop_cv2_ssl_conflict(cv2_datas)
+cv2_bins = _drop_cv2_ssl_conflict(cv2_bins)
 
 # ONNX 引擎 DB 后处理依赖
 pyclipper_d, pyclipper_b, pyclipper_h = collect_all('pyclipper')
