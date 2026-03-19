@@ -186,7 +186,9 @@ class MainWindow(QMainWindow):
         self._start_next_batch_file()
 
     def _on_batch_all_finished(self) -> None:
+        elapsed = 0.0
         if self._progress_dialog:
+            elapsed = self._progress_dialog.elapsed_seconds()
             self._progress_dialog.close()
             self._progress_dialog = None
 
@@ -210,7 +212,12 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 errors.append(f"{file_path.name}: {e}")
 
-        msg = f"批量转换完成！\n成功: {success_count}/{len(self._batch_files)}"
+        if elapsed < 60:
+            time_str = f"{elapsed:.1f} 秒"
+        else:
+            m, s = divmod(int(elapsed), 60)
+            time_str = f"{m} 分 {s} 秒"
+        msg = f"批量转换完成！耗时 {time_str}\n成功: {success_count}/{len(self._batch_files)}"
         if errors:
             msg += f"\n\n失败文件:\n" + "\n".join(errors[:5])
         if success_count > 0:
@@ -230,7 +237,9 @@ class MainWindow(QMainWindow):
             self._progress_dialog.update_progress(stage, current, total)
 
     def _on_finished(self, result: DocumentResult) -> None:
+        elapsed = 0.0
         if self._progress_dialog:
+            elapsed = self._progress_dialog.elapsed_seconds()
             self._progress_dialog.close()
             self._progress_dialog = None
 
@@ -252,10 +261,22 @@ class MainWindow(QMainWindow):
 
             converter.convert(result, output_path)
 
+            # 格式化耗时
+            if elapsed < 60:
+                time_str = f"{elapsed:.1f} 秒"
+            else:
+                m, s = divmod(int(elapsed), 60)
+                time_str = f"{m} 分 {s} 秒"
+
+            page_info = f"{result.page_count} 页" if result.page_count > 1 else ""
+            char_count = len(result.plain_text.replace("\n", "").replace(" ", ""))
+
             reply = QMessageBox.information(
                 self,
                 "转换完成",
-                f"文件已保存到:\n{output_path}\n\n是否打开文件？\n（预览已在【预览】页显示）",
+                f"文件已保存到:\n{output_path}\n\n"
+                f"耗时 {time_str}  {page_info}  {char_count} 字\n\n"
+                f"是否打开文件？",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
             if reply == QMessageBox.StandardButton.Yes:
