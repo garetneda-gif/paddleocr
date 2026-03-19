@@ -63,6 +63,11 @@ class StructureEngine:
         kwargs = dict(
             use_doc_orientation_classify=False,
             use_doc_unwarping=False,
+            use_table_recognition=True,
+            use_formula_recognition=False,
+            use_chart_recognition=False,
+            use_seal_recognition=False,
+            use_region_detection=True,
             lang=self._lang,
         )
         kwargs.update(self._options)
