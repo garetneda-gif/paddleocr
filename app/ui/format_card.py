@@ -6,6 +6,7 @@ from PySide6.QtCore import Signal, Qt
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 from app.models.enums import OutputFormat
+from app.ui.theme import ACCENT, ACCENT_BG, BG_PRIMARY, BORDER, TEXT_PRIMARY, TEXT_SECONDARY
 
 _FORMAT_INFO: dict[OutputFormat, tuple[str, str]] = {
     OutputFormat.TXT: ("TXT", "纯文本"),
@@ -16,24 +17,29 @@ _FORMAT_INFO: dict[OutputFormat, tuple[str, str]] = {
     OutputFormat.RTF: ("RTF", "富文本格式"),
 }
 
-_NORMAL_STYLE = """
-    QWidget#formatCard {
-        background-color: #FFFFFF;
-        border: 2px solid #E0E0E0;
+_NORMAL_STYLE = f"""
+    QWidget#formatCard {{
+        background-color: {BG_PRIMARY};
+        border: 2px solid {BORDER};
         border-radius: 12px;
-    }
-    QWidget#formatCard:hover {
-        border-color: #1A73E8;
-    }
+    }}
+    QWidget#formatCard:hover {{
+        border-color: {ACCENT};
+    }}
 """
 
-_SELECTED_STYLE = """
-    QWidget#formatCard {
-        background-color: #E8F0FE;
-        border: 2px solid #1A73E8;
+_SELECTED_STYLE = f"""
+    QWidget#formatCard {{
+        background-color: {ACCENT_BG};
+        border: 2px solid {ACCENT};
         border-radius: 12px;
-    }
+    }}
 """
+
+_TITLE_NORMAL = f"font-size: 16px; font-weight: bold; color: {TEXT_PRIMARY}; background: transparent; border: none;"
+_TITLE_SELECTED = f"font-size: 16px; font-weight: bold; color: {ACCENT}; background: transparent; border: none;"
+_DESC_NORMAL = f"font-size: 11px; color: {TEXT_SECONDARY}; background: transparent; border: none;"
+_DESC_SELECTED = f"font-size: 11px; color: {ACCENT}; background: transparent; border: none;"
 
 
 class FormatCard(QWidget):
@@ -55,12 +61,12 @@ class FormatCard(QWidget):
         title, desc = _FORMAT_INFO.get(fmt, (fmt.value.upper(), ""))
         self._title_label = QLabel(title)
         self._title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._title_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #333; background: transparent; border: none;")
+        self._title_label.setStyleSheet(_TITLE_NORMAL)
         layout.addWidget(self._title_label)
 
         self._desc_label = QLabel(desc)
         self._desc_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._desc_label.setStyleSheet("font-size: 11px; color: #888; background: transparent; border: none;")
+        self._desc_label.setStyleSheet(_DESC_NORMAL)
         layout.addWidget(self._desc_label)
 
     def mousePressEvent(self, event):
@@ -70,7 +76,9 @@ class FormatCard(QWidget):
         self._is_selected = is_selected
         if is_selected:
             self.setStyleSheet(_SELECTED_STYLE)
-            self._title_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #1A73E8; background: transparent; border: none;")
+            self._title_label.setStyleSheet(_TITLE_SELECTED)
+            self._desc_label.setStyleSheet(_DESC_SELECTED)
         else:
             self.setStyleSheet(_NORMAL_STYLE)
-            self._title_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #333; background: transparent; border: none;")
+            self._title_label.setStyleSheet(_TITLE_NORMAL)
+            self._desc_label.setStyleSheet(_DESC_NORMAL)

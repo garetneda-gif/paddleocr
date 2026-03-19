@@ -14,28 +14,35 @@ BATCH_SIZE = 20
 # ─── 单例进程池 ───
 _pool: ProcessPoolExecutor | None = None
 _pool_ctx = None
+_pool_workers: int = 0
 
 
 def get_pool(max_workers: int = 2) -> ProcessPoolExecutor:
-    """返回或创建单例进程池（spawn context）。"""
+    """返回或创建单例进程池（spawn context）。若 max_workers 变化则重建。"""
     import multiprocessing as mp
 
-    global _pool, _pool_ctx
+    global _pool, _pool_ctx, _pool_workers
     if _pool is not None:
-        return _pool
+        if max_workers == _pool_workers:
+            return _pool
+        _log.info("max_workers 变更 %d→%d，重建进程池", _pool_workers, max_workers)
+        _pool.shutdown(wait=True)
+        _pool = None
     _pool_ctx = mp.get_context("spawn")
     _pool = ProcessPoolExecutor(max_workers=max_workers, mp_context=_pool_ctx)
+    _pool_workers = max_workers
     _log.info("创建进程池: max_workers=%d", max_workers)
     return _pool
 
 
 def shutdown_pool() -> None:
     """关闭单例进程池（应用退出时调用）。"""
-    global _pool
+    global _pool, _pool_workers
     if _pool is not None:
         _log.info("关闭进程池")
-        _pool.shutdown(wait=False, cancel_futures=True)
+        _pool.shutdown(wait=True, cancel_futures=True)
         _pool = None
+        _pool_workers = 0
 
 _log = logging.getLogger("paddleocr.ocr_subprocess")
 

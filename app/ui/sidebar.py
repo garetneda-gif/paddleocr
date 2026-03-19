@@ -5,6 +5,8 @@ from __future__ import annotations
 from PySide6.QtCore import Signal, Qt
 from PySide6.QtWidgets import QPushButton, QVBoxLayout, QWidget, QLabel
 
+from app.ui.theme import ACCENT, BORDER_LIGHT, TEXT_TERTIARY, __version__
+
 
 _NAV_ITEMS = [
     ("\u2B50", "转换"),
@@ -27,14 +29,14 @@ class Sidebar(QWidget):
 
         app_label = QLabel("PaddleOCR")
         app_label.setStyleSheet(
-            "font-size: 17px; font-weight: 700; color: #1A73E8; "
+            f"font-size: 17px; font-weight: 700; color: {ACCENT}; "
             "padding: 8px 8px; letter-spacing: 0.5px;"
         )
         layout.addWidget(app_label)
 
-        ver_label = QLabel("v2.1  ONNX + Paddle")
+        ver_label = QLabel(f"v{__version__}  ONNX + Paddle")
         ver_label.setStyleSheet(
-            "font-size: 10px; color: #AEAEB2; padding: 0 8px 0 8px;"
+            f"font-size: 10px; color: {TEXT_TERTIARY}; padding: 0 8px 0 8px;"
         )
         layout.addWidget(ver_label)
         layout.addSpacing(20)
@@ -51,7 +53,7 @@ class Sidebar(QWidget):
 
         footer = QLabel("Powered by PP-OCRv5")
         footer.setStyleSheet(
-            "font-size: 10px; color: #C7C7CC; padding: 4px 8px;"
+            f"font-size: 10px; color: {BORDER_LIGHT}; padding: 4px 8px;"
         )
         layout.addWidget(footer)
 

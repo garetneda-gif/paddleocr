@@ -45,7 +45,7 @@ class MainWindow(QMainWindow):
         # 批量处理状态
         self._batch_files: list[Path] = []
         self._batch_index: int = 0
-        self._batch_results: list[tuple[Path, DocumentResult]] = []
+        self._batch_results: list[tuple[Path, bool]] = []
         self._batch_fmt: OutputFormat = OutputFormat.TXT
         self._batch_lang: str = "ch"
 
@@ -174,14 +174,31 @@ class MainWindow(QMainWindow):
             self._progress_dialog.update_progress(prefix + stage, current, total)
 
     def _on_batch_file_finished(self, result: DocumentResult) -> None:
-        self._batch_results.append((self._batch_files[self._batch_index], result))
+        file_path = self._batch_files[self._batch_index]
+        try:
+            converter = self._router.select_converter(self._batch_fmt)
+            output_dir = default_output_dir()
+            ext = converter.file_extension
+            output_path = output_dir / (file_path.stem + ext)
+
+            counter = 1
+            while output_path.exists():
+                output_path = output_dir / f"{file_path.stem}_{counter}{ext}"
+                counter += 1
+
+            converter.convert(result, output_path)
+            self._batch_results.append((file_path, True))
+        except Exception as e:
+            _log.warning("批量导出失败: %s — %s", file_path.name, e)
+            self._batch_results.append((file_path, False))
+
         self._batch_index += 1
         self._start_next_batch_file()
 
     def _on_batch_file_error(self, msg: str) -> None:
-        file_name = self._batch_files[self._batch_index].name
-        _log.warning("批量处理文件失败: %s — %s", file_name, msg)
-        # 跳过失败的文件，继续下一个
+        file_path = self._batch_files[self._batch_index]
+        _log.warning("批量处理文件失败: %s — %s", file_path.name, msg)
+        self._batch_results.append((file_path, False))
         self._batch_index += 1
         self._start_next_batch_file()
 
@@ -192,25 +209,8 @@ class MainWindow(QMainWindow):
             self._progress_dialog.close()
             self._progress_dialog = None
 
-        success_count = 0
-        errors: list[str] = []
-
-        for file_path, result in self._batch_results:
-            try:
-                converter = self._router.select_converter(self._batch_fmt)
-                output_dir = default_output_dir()
-                ext = converter.file_extension
-                output_path = output_dir / (file_path.stem + ext)
-
-                counter = 1
-                while output_path.exists():
-                    output_path = output_dir / f"{file_path.stem}_{counter}{ext}"
-                    counter += 1
-
-                converter.convert(result, output_path)
-                success_count += 1
-            except Exception as e:
-                errors.append(f"{file_path.name}: {e}")
+        success_count = sum(1 for _, ok in self._batch_results if ok)
+        errors = [fp.name for fp, ok in self._batch_results if not ok]
 
         if elapsed < 60:
             time_str = f"{elapsed:.1f} 秒"
@@ -219,7 +219,7 @@ class MainWindow(QMainWindow):
             time_str = f"{m} 分 {s} 秒"
         msg = f"批量转换完成！耗时 {time_str}\n成功: {success_count}/{len(self._batch_files)}"
         if errors:
-            msg += f"\n\n失败文件:\n" + "\n".join(errors[:5])
+            msg += "\n\n失败文件:\n" + "\n".join(errors[:5])
         if success_count > 0:
             msg += f"\n\n输出目录: {default_output_dir()}"
 

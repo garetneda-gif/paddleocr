@@ -188,8 +188,17 @@ class DBDetector:
     ) -> None:
         import onnxruntime as ort
 
+        opts = ort.SessionOptions()
+        opts.intra_op_num_threads = 2
+        opts.inter_op_num_threads = 1
+        opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        opts.enable_cpu_mem_arena = True
+        opts.enable_mem_pattern = True
+        opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+
         self.session = ort.InferenceSession(
             str(onnx_path),
+            sess_options=opts,
             providers=["CPUExecutionProvider"],
         )
         self.input_name = self.session.get_inputs()[0].name
@@ -339,8 +348,17 @@ class CRNNRecognizer:
     ) -> None:
         import onnxruntime as ort
 
+        opts = ort.SessionOptions()
+        opts.intra_op_num_threads = 2
+        opts.inter_op_num_threads = 1
+        opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        opts.enable_cpu_mem_arena = True
+        opts.enable_mem_pattern = True
+        opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+
         self.session = ort.InferenceSession(
             str(onnx_path),
+            sess_options=opts,
             providers=["CPUExecutionProvider"],
         )
         self.input_name = self.session.get_inputs()[0].name
@@ -625,6 +643,10 @@ class OnnxOCREngine:
             if score > best_score:
                 best_score = score
                 best_img = rotated
+
+            # 0° 方向已足够好时跳过其余方向（节省最多 75% 推理）
+            if angle == 0 and mean_score > 0.85 and len(boxes) >= 3:
+                return img
 
         return best_img
 

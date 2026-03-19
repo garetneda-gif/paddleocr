@@ -14,51 +14,60 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-_DIALOG_STYLE = """
-    QDialog {
-        background-color: #FFFFFF;
+from app.ui.theme import (
+    ACCENT, ACCENT_LIGHT, BG_PRIMARY, BG_SECONDARY, BORDER,
+    TEXT_PRIMARY, TEXT_SECONDARY, TEXT_TERTIARY,
+)
+
+_DIALOG_STYLE = f"""
+    QDialog {{
+        background-color: {BG_PRIMARY};
         border-radius: 16px;
-    }
-    QLabel#stageLabel {
+    }}
+    QLabel#stageLabel {{
         font-size: 15px;
         font-weight: 600;
-        color: #1D1D1F;
-    }
-    QLabel#detailLabel {
+        color: {TEXT_PRIMARY};
+    }}
+    QLabel#detailLabel {{
         font-size: 12px;
-        color: #6E6E73;
-    }
-    QLabel#timerLabel {
+        color: {TEXT_SECONDARY};
+    }}
+    QLabel#timerLabel {{
         font-size: 12px;
-        color: #AEAEB2;
+        color: {TEXT_TERTIARY};
         font-variant-numeric: tabular-nums;
-    }
-    QProgressBar {
+    }}
+    QProgressBar {{
         border: none;
         border-radius: 5px;
-        background-color: #E5E5EA;
+        background-color: {BORDER};
         text-align: center;
         height: 10px;
-    }
-    QProgressBar::chunk {
+    }}
+    QProgressBar::chunk {{
         background: qlineargradient(
             x1:0, y1:0, x2:1, y2:0,
-            stop:0 #1A73E8, stop:1 #4A9CF5
+            stop:0 {ACCENT}, stop:1 {ACCENT_LIGHT}
         );
         border-radius: 5px;
-    }
-    QPushButton#cancelBtn {
-        background-color: #F5F5F7;
-        border: 1px solid #E5E5EA;
+    }}
+    QPushButton#cancelBtn {{
+        background-color: {BG_SECONDARY};
+        border: 1px solid {BORDER};
         border-radius: 8px;
         padding: 8px 24px;
         font-size: 13px;
-        color: #6E6E73;
-    }
-    QPushButton#cancelBtn:hover {
-        background-color: #E5E5EA;
-        color: #1D1D1F;
-    }
+        color: {TEXT_SECONDARY};
+    }}
+    QPushButton#cancelBtn:hover {{
+        background-color: {BORDER};
+        color: {TEXT_PRIMARY};
+    }}
+    QPushButton#cancelBtn:disabled {{
+        color: {TEXT_TERTIARY};
+        background-color: {BORDER};
+    }}
 """
 
 
@@ -76,12 +85,18 @@ class ProgressDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("正在处理")
         self.setFixedSize(480, 200)
-        self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowCloseButtonHint)
+        # 移除关闭按钮和 Windows ? 帮助按钮
+        self.setWindowFlags(
+            self.windowFlags()
+            & ~Qt.WindowType.WindowCloseButtonHint
+            & ~Qt.WindowType.WindowContextHelpButtonHint
+        )
         self.setStyleSheet(_DIALOG_STYLE)
 
         self._start_time = time.monotonic()
         self._last_page = 0
         self._total_pages = 0
+        self._cancelled = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(28, 24, 28, 20)
@@ -112,12 +127,12 @@ class ProgressDialog(QDialog):
         self._speed_label.setObjectName("detailLabel")
         layout.addWidget(self._speed_label)
 
-        cancel_btn = QPushButton("取消")
-        cancel_btn.setObjectName("cancelBtn")
-        cancel_btn.setFixedWidth(100)
-        cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        cancel_btn.clicked.connect(self._on_cancel)
-        layout.addWidget(cancel_btn, alignment=Qt.AlignmentFlag.AlignCenter)
+        self._cancel_btn = QPushButton("取消")
+        self._cancel_btn.setObjectName("cancelBtn")
+        self._cancel_btn.setFixedWidth(100)
+        self._cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._cancel_btn.clicked.connect(self._on_cancel)
+        layout.addWidget(self._cancel_btn, alignment=Qt.AlignmentFlag.AlignCenter)
 
         # 每秒刷新计时器
         self._tick_timer = QTimer(self)
@@ -156,5 +171,14 @@ class ProgressDialog(QDialog):
         return time.monotonic() - self._start_time
 
     def _on_cancel(self) -> None:
+        if self._cancelled:
+            return
+        self._cancelled = True
         self._stage_label.setText("正在取消...")
+        self._cancel_btn.setEnabled(False)
+        self._tick_timer.stop()
+        self._progress.setStyleSheet(
+            f"QProgressBar {{ background-color: {BORDER}; border: none; border-radius: 5px; height: 10px; }}"
+            f"QProgressBar::chunk {{ background-color: {TEXT_TERTIARY}; border-radius: 5px; }}"
+        )
         self.cancel_requested.emit()

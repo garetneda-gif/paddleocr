@@ -50,6 +50,13 @@ class OCREngine:
 
     def predict(self, image_path: Path) -> DocumentResult:
         self._ensure_model()
+
+        from PIL import Image
+
+        img = Image.open(image_path)
+        img_w, img_h = img.size
+        img.close()
+
         raw_results = self._ocr.predict(str(image_path))
 
         pages: list[PageResult] = []
@@ -84,13 +91,11 @@ class OCREngine:
                 )
                 all_texts.append(text)
 
-            max_x = max((b.bbox[2] for b in blocks), default=0)
-            max_y = max((b.bbox[3] for b in blocks), default=0)
             pages.append(
                 PageResult(
                     page_index=page_idx,
-                    width=int(max_x) if max_x > 0 else 0,
-                    height=int(max_y) if max_y > 0 else 0,
+                    width=img_w,
+                    height=img_h,
                     blocks=blocks,
                 )
             )

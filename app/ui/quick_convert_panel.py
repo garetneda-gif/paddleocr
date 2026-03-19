@@ -19,34 +19,20 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from PySide6.QtCore import QTimer
+
 from app.models.enums import OutputFormat
 from app.ui.drop_zone import DropZone
 from app.ui.format_card import FormatCard
-
-_LANGUAGES = [
-    ("ch", "中文（含中英混合）"),
-    ("en", "English"),
-    ("japan", "日本語"),
-    ("korean", "한국어"),
-    ("french", "Français"),
-    ("german", "Deutsch"),
-    ("it", "Italiano"),
-    ("es", "Español"),
-    ("pt", "Português"),
-    ("ru", "Русский"),
-    ("ar", "العربية"),
-    ("chinese_cht", "繁體中文"),
-    ("latin", "Latin"),
-    ("cyrillic", "Cyrillic"),
-    ("devanagari", "Devanagari"),
-]
+from app.ui.theme import ACCENT, TEXT_SECONDARY, WARNING
+from app.utils.language_map import LANGUAGES
 
 
 def _hint(text: str) -> QLabel:
     """创建灰色小字说明标签。"""
     lbl = QLabel(text)
     lbl.setWordWrap(True)
-    lbl.setStyleSheet("font-size: 11px; color: #888; margin-left: 24px;")
+    lbl.setStyleSheet(f"font-size: 11px; color: {TEXT_SECONDARY}; margin-left: 24px;")
     return lbl
 
 
@@ -71,9 +57,10 @@ class QuickConvertPanel(QWidget):
         self._selected_file: Path | None = None
         self._selected_files: list[Path] = []
         self._selected_format: OutputFormat = OutputFormat.TXT
-        self._paddle_ok = self._check_paddle()
-        self._server_onnx_ok = self._check_server_onnx()
-        self._onnx_langs = set(self._supported_onnx_languages())
+        # 延迟检查 paddle/onnx 到事件循环启动后
+        self._paddle_ok = False
+        self._server_onnx_ok = False
+        self._onnx_langs: set[str] = {"ch", "en"}
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -85,7 +72,7 @@ class QuickConvertPanel(QWidget):
         layout.setSpacing(14)
 
         title = QLabel("快速转换")
-        title.setStyleSheet("font-size: 20px; font-weight: bold; color: #333;")
+        title.setStyleSheet(f"font-size: 20px; font-weight: bold; color: {ACCENT};")
         layout.addWidget(title)
 
         # ── 拖拽区域 ──
@@ -96,7 +83,7 @@ class QuickConvertPanel(QWidget):
 
         # ── 格式卡片 ──
         fmt_label = QLabel("选择输出格式：")
-        fmt_label.setStyleSheet("font-size: 13px; color: #555;")
+        fmt_label.setStyleSheet(f"font-size: 13px; color: {TEXT_SECONDARY};")
         layout.addWidget(fmt_label)
 
         fmt_layout = QHBoxLayout()
@@ -115,9 +102,9 @@ class QuickConvertPanel(QWidget):
         bottom = QHBoxLayout()
         bottom.addWidget(QLabel("识别语言："))
         self._lang_combo = QComboBox()
-        for code, name in _LANGUAGES:
-            if self._paddle_ok or code in self._onnx_langs:
-                self._lang_combo.addItem(name, code)
+        # 初始填充全部语言，延迟检查后会按后端过滤
+        for code, name in LANGUAGES.items():
+            self._lang_combo.addItem(name, code)
         self._lang_combo.setFixedWidth(200)
         bottom.addWidget(self._lang_combo)
         bottom.addSpacing(20)
@@ -127,16 +114,13 @@ class QuickConvertPanel(QWidget):
         self._speed_combo.addItem("速度优先（Mobile 模型，快 8x）", "mobile")
         self._speed_combo.setFixedWidth(260)
         self._speed_combo.setToolTip("不同模式会切换不同 ONNX 模型；Server 更准，Mobile 更省内存")
-        if not self._server_onnx_ok:
-            self._speed_combo.model().item(0).setEnabled(False)
-            self._speed_combo.setCurrentIndex(1)
-            self._speed_combo.setToolTip("当前环境未找到 Server ONNX 模型，仅可使用 Mobile 模式")
         bottom.addWidget(self._speed_combo)
 
         bottom.addStretch()
         self._start_btn = QPushButton("开始转换")
         self._start_btn.setObjectName("startButton")
         self._start_btn.setEnabled(False)
+        self._start_btn.setToolTip("请先选择文件")
         self._start_btn.clicked.connect(self._on_start)
         bottom.addWidget(self._start_btn)
         layout.addLayout(bottom)
@@ -185,7 +169,7 @@ class QuickConvertPanel(QWidget):
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         self._adv_toggle = QPushButton("▶ 高级选项（按当前引擎生效）")
         self._adv_toggle.setStyleSheet(
-            "QPushButton { border: none; color: #1A73E8; font-size: 13px; "
+            f"QPushButton {{ border: none; color: {ACCENT}; font-size: 13px; "
             "text-align: left; padding: 4px 0; } "
             "QPushButton:hover { text-decoration: underline; }"
         )
@@ -223,24 +207,22 @@ class QuickConvertPanel(QWidget):
         gl.addWidget(self._preserve_layout_check)
         gl.addWidget(_hint("勾选后 TXT/RTF 导出也走 PPStructureV3，以保留段落和标题层次"))
 
-        if not self._paddle_ok:
-            model = self._pipeline_combo.model()
-            model.item(2).setEnabled(False)  # 禁用 "PPStructureV3" 选项
-            self._preserve_layout_check.setEnabled(False)
-            self._no_paddle_hint = _hint(
-                "⚠ PPStructureV3 不可用（需要 PaddlePaddle）。"
-                "Word/HTML/Excel 将降级为纯文本 OCR 导出。"
-            )
-            self._no_paddle_hint.setStyleSheet(
-                "font-size: 11px; color: #e67e22; margin-left: 24px;"
-            )
-            gl.addWidget(self._no_paddle_hint)
-        if not self._paddle_ok:
-            self._onnx_lang_hint = _hint("当前仅提供 ONNX 可用语言：中文、英文。")
-            self._onnx_lang_hint.setStyleSheet(
-                "font-size: 11px; color: #1A73E8; margin-left: 24px;"
-            )
-            gl.addWidget(self._onnx_lang_hint)
+        self._no_paddle_hint = _hint(
+            "⚠ PPStructureV3 不可用（需要 PaddlePaddle）。"
+            "Word/HTML/Excel 将降级为纯文本 OCR 导出。"
+        )
+        self._no_paddle_hint.setStyleSheet(
+            f"font-size: 11px; color: {WARNING}; margin-left: 24px;"
+        )
+        self._no_paddle_hint.setVisible(False)
+        gl.addWidget(self._no_paddle_hint)
+
+        self._onnx_lang_hint = _hint("当前仅提供 ONNX 可用语言：中文、英文。")
+        self._onnx_lang_hint.setStyleSheet(
+            f"font-size: 11px; color: {ACCENT}; margin-left: 24px;"
+        )
+        self._onnx_lang_hint.setVisible(False)
+        gl.addWidget(self._onnx_lang_hint)
 
         self._backend_hint = _hint("")
         gl.addWidget(self._backend_hint)
@@ -363,8 +345,6 @@ class QuickConvertPanel(QWidget):
         gs.addWidget(self._use_region_det)
         gs.addWidget(_hint("在版面分析基础上进一步检测图文混排区域，提升复杂版面的解析精度"))
 
-        if not self._paddle_ok:
-            self._struct_group.setEnabled(False)
         adv.addWidget(self._struct_group)
 
         # ─── 6. 版面分析参数 ───
@@ -407,8 +387,6 @@ class QuickConvertPanel(QWidget):
         gla.addLayout(mr)
         gla.addWidget(_hint("控制如何合并相邻的版面区域。large 适合报纸/杂志等大分栏版面"))
 
-        if not self._paddle_ok:
-            self._layout_group.setEnabled(False)
         adv.addWidget(self._layout_group)
 
         # ─── 7. 印章检测参数 ───
@@ -447,8 +425,6 @@ class QuickConvertPanel(QWidget):
         gse.addLayout(_spin_row("印章识别置信过滤：", self._seal_rec_thresh))
         gse.addWidget(_hint("低于此值的印章文字识别结果被丢弃"))
 
-        if not self._paddle_ok:
-            self._seal_group.setEnabled(False)
         adv.addWidget(self._seal_group)
 
         # ─── 8. PDF 输入 ───
@@ -473,6 +449,51 @@ class QuickConvertPanel(QWidget):
         self._speed_combo.currentIndexChanged.connect(self._refresh_runtime_options)
         self._lang_combo.currentIndexChanged.connect(self._refresh_runtime_options)
         self._preserve_layout_check.toggled.connect(self._refresh_runtime_options)
+
+        # 延迟到事件循环启动后再检查后端（避免启动时阻塞 UI）
+        QTimer.singleShot(0, self._deferred_init)
+
+    # ── 延迟初始化 ──
+
+    def _deferred_init(self) -> None:
+        """延迟检查后端可用性 + 读取 QSettings 语言偏好。"""
+        self._paddle_ok = self._check_paddle()
+        self._server_onnx_ok = self._check_server_onnx()
+        self._onnx_langs = set(self._supported_onnx_languages())
+
+        # 按后端过滤语言列表
+        if not self._paddle_ok:
+            for i in range(self._lang_combo.count() - 1, -1, -1):
+                code = self._lang_combo.itemData(i)
+                if code not in self._onnx_langs:
+                    self._lang_combo.removeItem(i)
+
+        # 从 QSettings 恢复语言偏好
+        from PySide6.QtCore import QSettings
+        settings = QSettings("PaddleOCR", "Desktop")
+        saved_lang = settings.value("ocr/language", "")
+        if saved_lang:
+            idx = self._lang_combo.findData(saved_lang)
+            if idx >= 0:
+                self._lang_combo.setCurrentIndex(idx)
+
+        # Server ONNX 不可用时禁用
+        if not self._server_onnx_ok:
+            self._speed_combo.model().item(0).setEnabled(False)
+            self._speed_combo.setCurrentIndex(1)
+            self._speed_combo.setToolTip("当前环境未找到 Server ONNX 模型，仅可使用 Mobile 模式")
+
+        # PPStructure 不可用时禁用并显示提示
+        if not self._paddle_ok:
+            model = self._pipeline_combo.model()
+            model.item(2).setEnabled(False)
+            self._preserve_layout_check.setEnabled(False)
+            self._struct_group.setEnabled(False)
+            self._layout_group.setEnabled(False)
+            self._seal_group.setEnabled(False)
+            self._no_paddle_hint.setVisible(True)
+            self._onnx_lang_hint.setVisible(True)
+
         self._refresh_runtime_options()
 
     # ── 事件处理 ──
@@ -598,6 +619,7 @@ class QuickConvertPanel(QWidget):
         self._selected_files = [path]
         self._drop_zone.set_file_info(path)
         self._start_btn.setEnabled(True)
+        self._start_btn.setToolTip("")
         self._refresh_runtime_options()
 
     def _on_files_selected(self, paths: list[Path]) -> None:
@@ -607,6 +629,7 @@ class QuickConvertPanel(QWidget):
         self._selected_file = paths[0]
         self._drop_zone.set_files_info(paths)
         self._start_btn.setEnabled(True)
+        self._start_btn.setToolTip("")
         self._refresh_runtime_options()
 
     def _on_format_selected(self, fmt: OutputFormat) -> None:
@@ -627,6 +650,9 @@ class QuickConvertPanel(QWidget):
         if not self._selected_files:
             return
         lang = self._lang_combo.currentData()
+        # 保存语言偏好
+        from PySide6.QtCore import QSettings
+        QSettings("PaddleOCR", "Desktop").setValue("ocr/language", lang)
         if len(self._selected_files) == 1:
             self.start_requested.emit(self._selected_files[0], self._selected_format, lang)
         else:

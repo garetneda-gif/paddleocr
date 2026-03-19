@@ -8,6 +8,10 @@ from PyInstaller.utils.hooks import collect_all, collect_submodules, collect_dat
 
 block_cipher = None
 ROOT = Path(SPECPATH).parent
+
+# 从 theme.py 读取版本号
+sys.path.insert(0, str(ROOT))
+from app.ui.theme import __version__ as APP_VERSION
 EXTERNAL_ONNX_DIR = Path("/Volumes/MOVESPEED/存储/models/onnx")
 EXTERNAL_CHAR_DICT = Path("/Volumes/MOVESPEED/存储/models/ppocr_keys_v5.txt")
 
@@ -176,7 +180,7 @@ app = BUNDLE(
     bundle_identifier="com.paddleocr.desktop",
     info_plist={
         "CFBundleDisplayName": "PaddleOCR",
-        "CFBundleShortVersionString": "2.1.0",
+        "CFBundleShortVersionString": APP_VERSION,
         "NSHighResolutionCapable": True,
         "LSMinimumSystemVersion": "11.0",
     },
@@ -184,15 +188,44 @@ app = BUNDLE(
 
 # ---- 后处理：用 Homebrew OpenSSL 替换 cv2 的旧版 libcrypto/libssl ----
 # cv2 自带的 OpenSSL 版本过低，缺少 X509_STORE_get1_objects 等符号，
-# 导致 Python _ssl 模块无法使用 HTTPS（所有 symlink 都指向 cv2 的版本）。
+# 导致 Python _ssl 模块无法使用 HTTPS。
+# 打包后 cv2 的 dylib 目录名为 __dot__dylibs（PyInstaller 编码），
+# 故 glob 用 *dylibs 匹配。替换后修正 install name 以脱离 Homebrew 绝对路径。
 import glob, shutil, subprocess as _sp
 _app_path = os.path.join(DISTPATH, "PaddleOCR.app")
 _brew_ssl = "/opt/homebrew/opt/openssl@3/lib"
+_replaced = {}  # lib_name -> [replaced_paths]
 for _lib in ["libcrypto.3.dylib", "libssl.3.dylib"]:
     _src = os.path.join(_brew_ssl, _lib)
     if not os.path.exists(_src):
+        print(f"POST-BUILD: WARNING — Homebrew OpenSSL not found: {_src}")
         continue
-    for _cv2_lib in glob.glob(os.path.join(_app_path, "**", "cv2*dylibs", _lib), recursive=True):
+    _replaced[_lib] = []
+    for _cv2_lib in glob.glob(os.path.join(_app_path, "**", "*dylibs", _lib), recursive=True):
         shutil.copy2(_src, _cv2_lib)
-        _sp.run(["codesign", "--force", "--sign", "-", _cv2_lib], check=False)
+        # 修正 install name，脱离 Homebrew 绝对路径
+        _sp.run(["install_name_tool", "-id", f"@loader_path/{_lib}", _cv2_lib],
+                check=False, capture_output=True)
+        _rc = _sp.run(["codesign", "--force", "--sign", "-", _cv2_lib], capture_output=True)
+        if _rc.returncode != 0:
+            print(f"POST-BUILD: WARNING — codesign failed for {_cv2_lib}: {_rc.stderr}")
+        _replaced[_lib].append(_cv2_lib)
         print(f"POST-BUILD: replaced {_cv2_lib} with Homebrew OpenSSL")
+
+# 修正 libssl 对 libcrypto 的引用（Homebrew 用绝对路径，需改为 @loader_path）
+for _ssl_path in _replaced.get("libssl.3.dylib", []):
+    # 找出 libssl 当前引用的 libcrypto 绝对路径
+    _otool = _sp.run(["otool", "-L", _ssl_path], capture_output=True, text=True)
+    for _line in _otool.stdout.splitlines():
+        _line = _line.strip()
+        if "libcrypto" in _line and ("homebrew" in _line.lower() or "Cellar" in _line):
+            _old_ref = _line.split("(")[0].strip()
+            _sp.run(["install_name_tool", "-change", _old_ref,
+                     "@loader_path/libcrypto.3.dylib", _ssl_path],
+                    check=False, capture_output=True)
+            _sp.run(["codesign", "--force", "--sign", "-", _ssl_path], capture_output=True)
+            print(f"POST-BUILD: fixed libssl->libcrypto ref: {_old_ref} -> @loader_path/")
+            break
+
+if not any(_replaced.values()):
+    print("POST-BUILD: WARNING — no cv2 dylibs found to replace! SSL may be broken.")

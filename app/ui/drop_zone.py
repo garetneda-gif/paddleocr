@@ -9,7 +9,15 @@ from PySide6.QtCore import Signal, Qt
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import QApplication, QLabel, QVBoxLayout, QWidget, QFileDialog
 
+from app.ui.theme import (
+    ACCENT, BG_PRIMARY, BORDER_LIGHT, SUCCESS, SUCCESS_BG,
+    TEXT_PRIMARY, TEXT_SECONDARY, TEXT_TERTIARY,
+)
+
 SUPPORTED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".tif", ".pdf"}
+
+_EXT_FILTER = " ".join(f"*{e}" for e in sorted(SUPPORTED_EXTENSIONS))
+_FILE_DIALOG_FILTER = f"支持的文件 ({_EXT_FILTER});;所有文件 (*)"
 
 
 def _collect_files(path: Path) -> list[Path]:
@@ -25,31 +33,31 @@ def _collect_files(path: Path) -> list[Path]:
     return []
 
 
-_IDLE_STYLE = """
-    #dropZone {
-        border: 2px dashed #C7C7CC;
+_IDLE_STYLE = f"""
+    #dropZone {{
+        border: 2px dashed {BORDER_LIGHT};
         border-radius: 16px;
         background-color: #FAFAFA;
         min-height: 130px;
-    }
+    }}
 """
 
-_HOVER_STYLE = """
-    #dropZone {
-        border: 2px solid #1A73E8;
+_HOVER_STYLE = f"""
+    #dropZone {{
+        border: 2px solid {ACCENT};
         border-radius: 16px;
         background-color: #EEF4FD;
         min-height: 130px;
-    }
+    }}
 """
 
-_HAS_FILE_STYLE = """
-    #dropZone {
-        border: 2px solid #34C759;
+_HAS_FILE_STYLE = f"""
+    #dropZone {{
+        border: 2px solid {SUCCESS};
         border-radius: 16px;
-        background-color: #F0FFF4;
+        background-color: {SUCCESS_BG};
         min-height: 130px;
-    }
+    }}
 """
 
 
@@ -71,14 +79,14 @@ class DropZone(QWidget):
         self._icon = QLabel("\u2B06")
         self._icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._icon.setStyleSheet(
-            "font-size: 32px; color: #C7C7CC; background: transparent; border: none;"
+            f"font-size: 32px; color: {BORDER_LIGHT}; background: transparent; border: none;"
         )
         layout.addWidget(self._icon)
 
         self._label = QLabel("拖拽图片、PDF 或文件夹到此处")
         self._label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._label.setStyleSheet(
-            "font-size: 14px; color: #6E6E73; font-weight: 500; "
+            f"font-size: 14px; color: {TEXT_SECONDARY}; font-weight: 500; "
             "background: transparent; border: none;"
         )
         layout.addWidget(self._label)
@@ -86,7 +94,7 @@ class DropZone(QWidget):
         self._sub = QLabel("点击选择  |  拖拽文件  |  \u2318V 粘贴截图")
         self._sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._sub.setStyleSheet(
-            "font-size: 12px; color: #AEAEB2; background: transparent; border: none;"
+            f"font-size: 12px; color: {TEXT_TERTIARY}; background: transparent; border: none;"
         )
         layout.addWidget(self._sub)
 
@@ -95,11 +103,13 @@ class DropZone(QWidget):
         self._paste_shortcut.activated.connect(self._paste_from_clipboard)
 
     def mousePressEvent(self, event):
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
         paths, _ = QFileDialog.getOpenFileNames(
             self,
             "选择文件（可多选）",
             "",
-            "支持的文件 (*.png *.jpg *.jpeg *.bmp *.tiff *.tif *.pdf);;所有文件 (*)",
+            _FILE_DIALOG_FILTER,
         )
         if paths:
             file_list = [Path(p) for p in paths]
@@ -112,19 +122,19 @@ class DropZone(QWidget):
             event.acceptProposedAction()
             self.setStyleSheet(_HOVER_STYLE)
             self._icon.setStyleSheet(
-                "font-size: 32px; color: #1A73E8; background: transparent; border: none;"
+                f"font-size: 32px; color: {ACCENT}; background: transparent; border: none;"
             )
 
     def dragLeaveEvent(self, event):
         self.setStyleSheet(_IDLE_STYLE)
         self._icon.setStyleSheet(
-            "font-size: 32px; color: #C7C7CC; background: transparent; border: none;"
+            f"font-size: 32px; color: {BORDER_LIGHT}; background: transparent; border: none;"
         )
 
     def dropEvent(self, event):
         self.setStyleSheet(_IDLE_STYLE)
         self._icon.setStyleSheet(
-            "font-size: 32px; color: #C7C7CC; background: transparent; border: none;"
+            f"font-size: 32px; color: {BORDER_LIGHT}; background: transparent; border: none;"
         )
         all_files: list[Path] = []
         for url in event.mimeData().urls():
@@ -150,7 +160,7 @@ class DropZone(QWidget):
         self.setStyleSheet(_HAS_FILE_STYLE)
         self._icon.setText("\u2705")
         self._icon.setStyleSheet(
-            "font-size: 28px; color: #34C759; background: transparent; border: none;"
+            f"font-size: 28px; color: {SUCCESS}; background: transparent; border: none;"
         )
         size = path.stat().st_size
         if size > 1024 * 1024:
@@ -159,12 +169,12 @@ class DropZone(QWidget):
             size_str = f"{size / 1024:.1f} KB"
         self._label.setText(path.name)
         self._label.setStyleSheet(
-            "font-size: 14px; color: #1D1D1F; font-weight: 600; "
+            f"font-size: 14px; color: {TEXT_PRIMARY}; font-weight: 600; "
             "background: transparent; border: none;"
         )
         self._sub.setText(f"{size_str}  \u2022  点击重新选择")
         self._sub.setStyleSheet(
-            "font-size: 12px; color: #6E6E73; background: transparent; border: none;"
+            f"font-size: 12px; color: {TEXT_SECONDARY}; background: transparent; border: none;"
         )
 
     def _paste_from_clipboard(self) -> None:
@@ -195,7 +205,10 @@ class DropZone(QWidget):
         if image.isNull():
             return
 
-        tmp = Path(tempfile.mktemp(suffix=".png", prefix="paddleocr_paste_"))
+        with tempfile.NamedTemporaryFile(
+            suffix=".png", prefix="paddleocr_paste_", delete=False
+        ) as f:
+            tmp = Path(f.name)
         image.save(str(tmp), "PNG")
         if tmp.exists():
             self.file_dropped.emit(tmp)
@@ -208,16 +221,16 @@ class DropZone(QWidget):
         self.setStyleSheet(_HAS_FILE_STYLE)
         self._icon.setText("\u2705")
         self._icon.setStyleSheet(
-            "font-size: 28px; color: #34C759; background: transparent; border: none;"
+            f"font-size: 28px; color: {SUCCESS}; background: transparent; border: none;"
         )
         total_size = sum(p.stat().st_size for p in paths)
         size_mb = total_size / (1024 * 1024)
         self._label.setText(f"已选择 {len(paths)} 个文件（{size_mb:.1f} MB）")
         self._label.setStyleSheet(
-            "font-size: 14px; color: #1D1D1F; font-weight: 600; "
+            f"font-size: 14px; color: {TEXT_PRIMARY}; font-weight: 600; "
             "background: transparent; border: none;"
         )
         self._sub.setText(f"{paths[0].name} 等  \u2022  点击重新选择")
         self._sub.setStyleSheet(
-            "font-size: 12px; color: #6E6E73; background: transparent; border: none;"
+            f"font-size: 12px; color: {TEXT_SECONDARY}; background: transparent; border: none;"
         )
