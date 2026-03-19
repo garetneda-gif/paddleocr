@@ -453,6 +453,92 @@ class CRNNRecognizer:
 
 
 # ═══════════════════════════════════════════════════════
+# 段落合并后处理
+# ═══════════════════════════════════════════════════════
+
+def _merge_lines_to_paragraphs(
+    lines: list[tuple[tuple[float, float, float, float], str, float]],
+    page_width: int,
+) -> list[BlockResult]:
+    """将行级检测结果合并为段落。
+
+    合并策略：
+    - 相邻行的垂直间距 < 行高 × 1.2 时视为同一段落
+    - 新行有明显首行缩进（左边距 > 页面宽度 5%）时开始新段落
+    - 垂直间距 > 行高 × 2.5 时强制分段（段落间空行）
+    """
+    if not lines:
+        return []
+
+    paragraphs: list[list[tuple[tuple[float, float, float, float], str, float]]] = []
+    current: list[tuple[tuple[float, float, float, float], str, float]] = [lines[0]]
+
+    for i in range(1, len(lines)):
+        prev_bbox = current[-1][0]
+        curr_bbox = lines[i][0]
+
+        prev_h = prev_bbox[3] - prev_bbox[1]
+        curr_h = curr_bbox[3] - curr_bbox[1]
+        line_h = max(prev_h, curr_h, 1)
+
+        # 垂直间距（当前行顶部 - 上一行底部）
+        v_gap = curr_bbox[1] - prev_bbox[3]
+
+        # 左边距差异（检测首行缩进）
+        left_margin_diff = curr_bbox[0] - prev_bbox[0]
+        indent_thresh = page_width * 0.04
+
+        # 判断是否分段
+        should_split = False
+        if v_gap > line_h * 2.5:
+            # 大间距 — 强制分段
+            should_split = True
+        elif v_gap > line_h * 1.2 and left_margin_diff > indent_thresh:
+            # 中间距 + 首行缩进 — 新段落
+            should_split = True
+        elif left_margin_diff > indent_thresh * 2:
+            # 明显缩进（即使行距不大）
+            should_split = True
+
+        if should_split:
+            paragraphs.append(current)
+            current = [lines[i]]
+        else:
+            current.append(lines[i])
+
+    if current:
+        paragraphs.append(current)
+
+    # 将每个段落的行合并为一个 BlockResult
+    blocks: list[BlockResult] = []
+    for para_lines in paragraphs:
+        x1 = min(b[0] for b, _, _ in para_lines)
+        y1 = min(b[1] for b, _, _ in para_lines)
+        x2 = max(b[2] for b, _, _ in para_lines)
+        y2 = max(b[3] for b, _, _ in para_lines)
+        text = "".join(t for _, t, _ in para_lines)
+        avg_score = sum(s for _, _, s in para_lines) / len(para_lines)
+
+        # 如果是短行且在页面上方，可能是标题
+        is_title = (
+            len(para_lines) == 1
+            and y1 < 200
+            and len(text) < 20
+        )
+
+        blocks.append(
+            BlockResult(
+                block_type=BlockType.TITLE if is_title else BlockType.PARAGRAPH,
+                bbox=(x1, y1, x2, y2),
+                text=text,
+                confidence=avg_score,
+            )
+        )
+
+    return blocks
+
+
+# ═══════════════════════════════════════════════════════
 # 完整 OCR 引擎
 # ═══════════════════════════════════════════════════════
 
@@ -566,9 +652,8 @@ class OnnxOCREngine:
         # 识别
         results = self._recognizer.recognize(img, boxes)
 
-        # 构建结果
-        blocks = []
-        texts = []
+        # 构建行级结果
+        lines: list[tuple[tuple[float, float, float, float], str, float]] = []
         score_thresh = float(self._options.get("text_rec_score_thresh", 0.0))
         for box, (text, score) in zip(boxes, results):
             if not text.strip():
@@ -577,15 +662,10 @@ class OnnxOCREngine:
                 continue
             x1, y1 = float(box[:, 0].min()), float(box[:, 1].min())
             x2, y2 = float(box[:, 0].max()), float(box[:, 1].max())
-            blocks.append(
-                BlockResult(
-                    block_type=BlockType.PARAGRAPH,
-                    bbox=(x1, y1, x2, y2),
-                    text=text,
-                    confidence=score,
-                )
-            )
-            texts.append(text)
+            lines.append(((x1, y1, x2, y2), text, score))
+
+        # 段落合并：将相邻行按空间关系拼接成段落
+        blocks = _merge_lines_to_paragraphs(lines, w)
 
         page = PageResult(
             page_index=0,
@@ -594,9 +674,10 @@ class OnnxOCREngine:
             blocks=blocks,
         )
 
+        texts = [b.text for b in blocks if b.text]
         return DocumentResult(
             source_path=image_path,
             page_count=1,
             pages=[page],
-            plain_text="\n".join(texts),
+            plain_text="\n\n".join(texts),
         )
