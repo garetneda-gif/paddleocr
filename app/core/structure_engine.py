@@ -46,6 +46,16 @@ class StructureEngine:
         if self._pipeline is not None:
             return
         os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
+
+        # PyInstaller 打包后 importlib.metadata 查不到包版本，
+        # 导致 paddlex 的依赖检查误判为缺失。直接跳过。
+        try:
+            import paddlex.utils.deps as _pdx_deps
+            _pdx_deps.is_extra_available = lambda *a, **k: True
+            _pdx_deps.require_extra = lambda *a, **k: None
+        except Exception:
+            pass
+
         from paddleocr import PPStructureV3
 
         kwargs = dict(
