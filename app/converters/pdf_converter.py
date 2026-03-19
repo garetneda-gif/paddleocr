@@ -61,11 +61,9 @@ def _is_retryable_font_error(exc: Exception) -> bool:
     message = str(exc).lower()
     markers = (
         "glyph",
-        "encoding",
         "cmap",
         "unknown font",
         "cannot encode",
-        "unknown file format",
     )
     return any(marker in message for marker in markers)
 
@@ -365,6 +363,7 @@ class PdfConverter(BaseConverter):
                 "PDF 文本层写入失败："
                 f" font={preferred_font} top={line_top:.2f}"
                 f" chars={len(line_text)} cjk={_needs_cjk_font(line_text)}"
+                f" cause={type(last_exc).__name__}"
             ) from last_exc
 
     @classmethod
