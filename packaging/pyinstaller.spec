@@ -182,14 +182,17 @@ app = BUNDLE(
     },
 )
 
-# ---- 后处理：用正确版本的 libcrypto/libssl 覆盖 cv2 的旧版 ----
-import glob, shutil
+# ---- 后处理：用 Homebrew OpenSSL 替换 cv2 的旧版 libcrypto/libssl ----
+# cv2 自带的 OpenSSL 版本过低，缺少 X509_STORE_get1_objects 等符号，
+# 导致 Python _ssl 模块无法使用 HTTPS（所有 symlink 都指向 cv2 的版本）。
+import glob, shutil, subprocess as _sp
 _app_path = os.path.join(DISTPATH, "PaddleOCR.app")
-_fw_dir = os.path.join(_app_path, "Contents", "Frameworks")
+_brew_ssl = "/opt/homebrew/opt/openssl@3/lib"
 for _lib in ["libcrypto.3.dylib", "libssl.3.dylib"]:
-    _src = os.path.join(_fw_dir, _lib)
+    _src = os.path.join(_brew_ssl, _lib)
     if not os.path.exists(_src):
         continue
     for _cv2_lib in glob.glob(os.path.join(_app_path, "**", "cv2*dylibs", _lib), recursive=True):
         shutil.copy2(_src, _cv2_lib)
-        print(f"POST-BUILD: replaced {_cv2_lib} with Frameworks version")
+        _sp.run(["codesign", "--force", "--sign", "-", _cv2_lib], check=False)
+        print(f"POST-BUILD: replaced {_cv2_lib} with Homebrew OpenSSL")
