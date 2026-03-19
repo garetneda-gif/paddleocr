@@ -1,11 +1,13 @@
-"""拖拽区域组件 — 支持拖入多文件、文件夹和点击多选。"""
+"""拖拽区域组件 — 支持拖入多文件、文件夹、点击多选和剪贴板粘贴图片。"""
 
 from __future__ import annotations
 
+import tempfile
 from pathlib import Path
 
 from PySide6.QtCore import Signal, Qt
-from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget, QFileDialog
+from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtWidgets import QApplication, QLabel, QVBoxLayout, QWidget, QFileDialog
 
 SUPPORTED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".tif", ".pdf"}
 
@@ -81,12 +83,16 @@ class DropZone(QWidget):
         )
         layout.addWidget(self._label)
 
-        self._sub = QLabel("或点击选择文件（支持多选）")
+        self._sub = QLabel("点击选择  |  拖拽文件  |  \u2318V 粘贴截图")
         self._sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._sub.setStyleSheet(
             "font-size: 12px; color: #AEAEB2; background: transparent; border: none;"
         )
         layout.addWidget(self._sub)
+
+        # 剪贴板粘贴快捷键（Cmd+V / Ctrl+V）
+        self._paste_shortcut = QShortcut(QKeySequence.StandardKey.Paste, self)
+        self._paste_shortcut.activated.connect(self._paste_from_clipboard)
 
     def mousePressEvent(self, event):
         paths, _ = QFileDialog.getOpenFileNames(
@@ -160,6 +166,40 @@ class DropZone(QWidget):
         self._sub.setStyleSheet(
             "font-size: 12px; color: #6E6E73; background: transparent; border: none;"
         )
+
+    def _paste_from_clipboard(self) -> None:
+        """从剪贴板粘贴图片，保存为临时文件后触发信号。"""
+        clipboard = QApplication.clipboard()
+        mime = clipboard.mimeData()
+
+        # 优先检查文件 URL（复制的文件）
+        if mime.hasUrls():
+            all_files: list[Path] = []
+            for url in mime.urls():
+                path = Path(url.toLocalFile())
+                all_files.extend(_collect_files(path))
+            if all_files:
+                seen: set[Path] = set()
+                unique: list[Path] = []
+                for f in all_files:
+                    if f not in seen:
+                        seen.add(f)
+                        unique.append(f)
+                if len(unique) == 1:
+                    self.file_dropped.emit(unique[0])
+                self.files_dropped.emit(unique)
+                return
+
+        # 检查剪贴板图片（截图 / 复制的图片）
+        image = clipboard.image()
+        if image.isNull():
+            return
+
+        tmp = Path(tempfile.mktemp(suffix=".png", prefix="paddleocr_paste_"))
+        image.save(str(tmp), "PNG")
+        if tmp.exists():
+            self.file_dropped.emit(tmp)
+            self.files_dropped.emit([tmp])
 
     def set_files_info(self, paths: list[Path]) -> None:
         if len(paths) == 1:

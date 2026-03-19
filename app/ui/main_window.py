@@ -51,6 +51,7 @@ class MainWindow(QMainWindow):
 
         self._setup_ui()
         self._load_styles()
+        self._setup_shortcuts()
 
     def _setup_ui(self) -> None:
         central = QWidget()
@@ -79,6 +80,18 @@ class MainWindow(QMainWindow):
         # 页面 2：设置
         self._settings_panel = SettingsPanel()
         self._stack.addWidget(self._settings_panel)
+
+    def _setup_shortcuts(self) -> None:
+        from PySide6.QtGui import QKeySequence, QShortcut
+        paste = QShortcut(QKeySequence.StandardKey.Paste, self)
+        paste.activated.connect(self._on_paste)
+
+    def _on_paste(self) -> None:
+        """全局 Cmd+V：转发给转换面板的 DropZone。"""
+        if self._stack.currentIndex() != 0:
+            self._sidebar._on_click(0)
+            self._stack.setCurrentIndex(0)
+        self._convert_panel._drop_zone._paste_from_clipboard()
 
     def _load_styles(self) -> None:
         from app.utils.paths import resources_dir

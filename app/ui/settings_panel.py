@@ -106,7 +106,7 @@ class SettingsPanel(QWidget):
         about_group = QGroupBox("关于")
         about_layout = QVBoxLayout(about_group)
         about_text = QLabel(
-            "PaddleOCR 桌面版 v2.0.0\n\n"
+            "PaddleOCR 桌面版 v2.1.0\n\n"
             "识别引擎：ONNX Runtime（PP-OCRv5）+ 可选 PaddlePaddle（PPStructureV3）\n"
             "UI 框架：PySide6 (Qt 6)\n\n"
             "支持格式：TXT / PDF / Word / HTML / Excel / RTF"
