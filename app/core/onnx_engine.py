@@ -184,7 +184,7 @@ class DBDetector:
         limit_type: str = "max",
         thresh: float = 0.3,
         box_thresh: float = 0.45,
-        unclip_ratio: float = 2.0,
+        unclip_ratio: float = 1.6,
     ) -> None:
         import onnxruntime as ort
 
@@ -289,15 +289,6 @@ class DBDetector:
             box[:, 1] *= ratio_h
             box = self._order_points(box)
 
-            # 扩展检测框边距，防止行尾字符被裁掉
-            bw = max(box[1, 0] - box[0, 0], box[2, 0] - box[3, 0])
-            bh = max(box[3, 1] - box[0, 1], box[2, 1] - box[1, 1])
-            mx = max(8.0, bw * 0.05)
-            my = max(3.0, bh * 0.05)
-            box[0] += [-mx, -my]
-            box[1] += [mx, -my]
-            box[2] += [mx, my]
-            box[3] += [-mx, my]
             # 裁剪到图像边界内
             box[:, 0] = np.clip(box[:, 0], 0, src_w)
             box[:, 1] = np.clip(box[:, 1], 0, src_h)
@@ -534,7 +525,7 @@ def _merge_lines_to_paragraphs(
         y1 = min(b[1] for b, _, _ in para_lines)
         x2 = max(b[2] for b, _, _ in para_lines)
         y2 = max(b[3] for b, _, _ in para_lines)
-        text = "".join(t for _, t, _ in para_lines)
+        text = "\n".join(t for _, t, _ in para_lines)
         avg_score = sum(s for _, _, s in para_lines) / len(para_lines)
 
         # 如果是短行且在页面上方，可能是标题
@@ -604,7 +595,7 @@ class OnnxOCREngine:
             limit_type=str(self._options.get("text_det_limit_type", "max")),
             thresh=float(self._options.get("text_det_thresh", 0.3)),
             box_thresh=float(self._options.get("text_det_box_thresh", 0.45)),
-            unclip_ratio=float(self._options.get("text_det_unclip_ratio", 2.0)),
+            unclip_ratio=float(self._options.get("text_det_unclip_ratio", 1.6)),
         )
         self._recognizer = CRNNRecognizer(
             rec_path,
@@ -650,6 +641,25 @@ class OnnxOCREngine:
 
         return best_img
 
+    @staticmethod
+    def _sort_boxes_reading_order(
+        boxes: list[np.ndarray],
+        y_threshold: float = 10.0,
+    ) -> list[np.ndarray]:
+        """RapidOCR 方式：y 差 < 阈值视为同行，行内按 x 排序。"""
+        if not boxes:
+            return boxes
+        boxes.sort(key=lambda b: b[:, 1].min())
+        row_ids = [0]
+        for i in range(1, len(boxes)):
+            if boxes[i][:, 1].min() - boxes[i - 1][:, 1].min() >= y_threshold:
+                row_ids.append(row_ids[-1] + 1)
+            else:
+                row_ids.append(row_ids[-1])
+        paired = list(zip(row_ids, range(len(boxes)), boxes))
+        paired.sort(key=lambda t: (t[0], t[2][:, 0].min()))
+        return [t[2] for t in paired]
+
     def predict(self, image_path: Path) -> DocumentResult:
         """与 OCREngine.predict() 接口一致。"""
         self._ensure_model()
@@ -668,8 +678,8 @@ class OnnxOCREngine:
         # 检测
         boxes = self._detector.detect(img)
 
-        # 按阅读顺序排序（先 y 后 x）
-        boxes.sort(key=lambda b: (b[:, 1].min(), b[:, 0].min()))
+        # 按阅读顺序排序（RapidOCR 方式：y 差 < 阈值视为同行，行内按 x 排序）
+        boxes = self._sort_boxes_reading_order(boxes)
 
         # 识别
         results = self._recognizer.recognize(img, boxes)
@@ -686,8 +696,18 @@ class OnnxOCREngine:
             x2, y2 = float(box[:, 0].max()), float(box[:, 1].max())
             lines.append(((x1, y1, x2, y2), text, score))
 
-        # 段落合并：将相邻行按空间关系拼接成段落
-        blocks = _merge_lines_to_paragraphs(lines, w)
+        # 每行独立 block，保留精确 bbox（段落合并由 layout_analyzer 按需处理）
+        blocks: list[BlockResult] = []
+        for (x1l, y1l, x2l, y2l), text, score in lines:
+            is_title = y1l < 200 and len(text) < 20
+            blocks.append(
+                BlockResult(
+                    block_type=BlockType.TITLE if is_title else BlockType.PARAGRAPH,
+                    bbox=(x1l, y1l, x2l, y2l),
+                    text=text,
+                    confidence=score,
+                )
+            )
 
         page = PageResult(
             page_index=0,
