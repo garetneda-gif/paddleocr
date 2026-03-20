@@ -90,31 +90,64 @@ class StructureEngine:
 
             blocks: list[BlockResult] = []
 
-            # 从 parsing_res_list 提取结构化块（LayoutBlock 对象）
-            parsing_list = page_raw.get("parsing_res_list", [])
-            for item in parsing_list:
-                label = getattr(item, "label", "other")
-                block_type = _LABEL_MAP.get(label, BlockType.OTHER)
+            # 优先从 overall_ocr_res 提取行级 block（每行独立 bbox），
+            # 对齐开源项目做法，确保 PDF 文本层逐行精确定位。
+            # 回退：overall_ocr_res 不可用时，从 parsing_res_list 提取段落级 block。
+            overall_ocr = page_raw.get("overall_ocr_res") or {}
+            rec_boxes = overall_ocr.get("rec_boxes", [])
+            rec_texts = overall_ocr.get("rec_texts", [])
+            rec_scores = overall_ocr.get("rec_scores", [])
 
-                raw_bbox = getattr(item, "bbox", [0, 0, 0, 0])
-                bbox = (
-                    float(raw_bbox[0]),
-                    float(raw_bbox[1]),
-                    float(raw_bbox[2]),
-                    float(raw_bbox[3]),
-                )
+            if hasattr(rec_boxes, "tolist"):
+                rec_boxes = rec_boxes.tolist()
 
-                content = getattr(item, "content", "") or ""
-
-                blocks.append(
-                    BlockResult(
-                        block_type=block_type,
-                        bbox=bbox,
-                        text=content,
+            if rec_texts:
+                for i, text in enumerate(rec_texts):
+                    if not text or not text.strip():
+                        continue
+                    box = rec_boxes[i] if i < len(rec_boxes) else [0, 0, 0, 0]
+                    score = float(rec_scores[i]) if i < len(rec_scores) else None
+                    bbox = (
+                        float(box[0]),
+                        float(box[1]),
+                        float(box[2]),
+                        float(box[3]),
                     )
-                )
-                if content:
-                    all_texts.append(content)
+                    blocks.append(
+                        BlockResult(
+                            block_type=BlockType.PARAGRAPH,
+                            bbox=bbox,
+                            text=text,
+                            confidence=score,
+                        )
+                    )
+                    all_texts.append(text)
+            else:
+                # 回退：从 parsing_res_list 提取段落级 block
+                parsing_list = page_raw.get("parsing_res_list", [])
+                for item in parsing_list:
+                    label = getattr(item, "label", "other")
+                    block_type = _LABEL_MAP.get(label, BlockType.OTHER)
+
+                    raw_bbox = getattr(item, "bbox", [0, 0, 0, 0])
+                    bbox = (
+                        float(raw_bbox[0]),
+                        float(raw_bbox[1]),
+                        float(raw_bbox[2]),
+                        float(raw_bbox[3]),
+                    )
+
+                    content = getattr(item, "content", "") or ""
+
+                    blocks.append(
+                        BlockResult(
+                            block_type=block_type,
+                            bbox=bbox,
+                            text=content,
+                        )
+                    )
+                    if content:
+                        all_texts.append(content)
 
             # 补充表格结果
             for tbl in page_raw.get("table_res_list", []):
