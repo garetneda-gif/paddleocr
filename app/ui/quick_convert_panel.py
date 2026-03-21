@@ -65,6 +65,8 @@ class QuickConvertPanel(QWidget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setAcceptDrops(True)
+        scroll.viewport().setAcceptDrops(True)
 
         container = QWidget()
         layout = QVBoxLayout(container)

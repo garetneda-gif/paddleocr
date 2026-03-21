@@ -6,10 +6,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QMainWindow,
     QMessageBox,
+    QPushButton,
     QStackedWidget,
     QWidget,
 )
@@ -25,6 +27,7 @@ from app.ui.quick_convert_panel import QuickConvertPanel
 from app.ui.settings_panel import SettingsPanel
 from app.ui.sidebar import Sidebar
 from app.utils.log import get_logger
+from app.utils.notify import send_notification
 from app.utils.paths import default_output_dir
 
 _log = get_logger("main_window")
@@ -127,6 +130,7 @@ class MainWindow(QMainWindow):
         self._progress_dialog.cancel_requested.connect(self._on_cancel)
         self._progress_dialog.show()
 
+        self._sidebar.set_processing(True)
         self._worker.start()
 
     # ── 批量处理 ──
@@ -143,6 +147,7 @@ class MainWindow(QMainWindow):
         self._progress_dialog.cancel_requested.connect(self._on_cancel)
         self._progress_dialog.show()
 
+        self._sidebar.set_processing(True)
         self._start_next_batch_file()
 
     def _start_next_batch_file(self) -> None:
@@ -189,7 +194,7 @@ class MainWindow(QMainWindow):
             converter.convert(result, output_path)
             self._batch_results.append((file_path, True))
         except Exception as e:
-            _log.warning("批量导出失败: %s — %s", file_path.name, e)
+            _log.warning("批量导出失败: %s -- %s", file_path.name, e)
             self._batch_results.append((file_path, False))
 
         self._batch_index += 1
@@ -197,7 +202,7 @@ class MainWindow(QMainWindow):
 
     def _on_batch_file_error(self, msg: str) -> None:
         file_path = self._batch_files[self._batch_index]
-        _log.warning("批量处理文件失败: %s — %s", file_path.name, msg)
+        _log.warning("批量处理文件失败: %s -- %s", file_path.name, msg)
         self._batch_results.append((file_path, False))
         self._batch_index += 1
         self._start_next_batch_file()
@@ -209,6 +214,8 @@ class MainWindow(QMainWindow):
             self._progress_dialog.close()
             self._progress_dialog = None
 
+        self._sidebar.set_processing(False)
+
         success_count = sum(1 for _, ok in self._batch_results if ok)
         errors = [fp.name for fp, ok in self._batch_results if not ok]
 
@@ -217,18 +224,24 @@ class MainWindow(QMainWindow):
         else:
             m, s = divmod(int(elapsed), 60)
             time_str = f"{m} 分 {s} 秒"
-        msg = f"批量转换完成！耗时 {time_str}\n成功: {success_count}/{len(self._batch_files)}"
-        if errors:
-            msg += "\n\n失败文件:\n" + "\n".join(errors[:5])
-        if success_count > 0:
-            msg += f"\n\n输出目录: {default_output_dir()}"
 
-        reply = QMessageBox.information(
-            self, "批量转换完成", msg,
-            QMessageBox.StandardButton.Open | QMessageBox.StandardButton.Ok,
-        )
-        if reply == QMessageBox.StandardButton.Open:
-            self._open_file(default_output_dir())
+        msg = f"批量转换完成  {success_count}/{len(self._batch_files)} 成功  耗时 {time_str}"
+        if errors:
+            msg += f"  失败: {', '.join(errors[:3])}"
+
+        output_dir = default_output_dir()
+        send_notification("PaddleOCR 批量转换完成", msg)
+
+        icon = QMessageBox.Icon.Information if not errors else QMessageBox.Icon.Warning
+        dlg = QMessageBox(self)
+        dlg.setWindowTitle("批量转换完成")
+        dlg.setText(msg)
+        dlg.setIcon(icon)
+        open_btn = dlg.addButton("打开目录", QMessageBox.ButtonRole.AcceptRole)
+        dlg.addButton("关闭", QMessageBox.ButtonRole.RejectRole)
+        dlg.exec()
+        if dlg.clickedButton() == open_btn:
+            self._open_file(output_dir)
 
     # ── 进度 / 完成 / 错误 ──
 
@@ -242,6 +255,8 @@ class MainWindow(QMainWindow):
             elapsed = self._progress_dialog.elapsed_seconds()
             self._progress_dialog.close()
             self._progress_dialog = None
+
+        self._sidebar.set_processing(False)
 
         # 将结果传给预览面板
         self._preview_panel.set_result(result)
@@ -271,15 +286,18 @@ class MainWindow(QMainWindow):
             page_info = f"{result.page_count} 页" if result.page_count > 1 else ""
             char_count = len(result.plain_text.replace("\n", "").replace(" ", ""))
 
-            reply = QMessageBox.information(
-                self,
-                "转换完成",
-                f"文件已保存到:\n{output_path}\n\n"
-                f"耗时 {time_str}  {page_info}  {char_count} 字\n\n"
-                f"是否打开文件？",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            )
-            if reply == QMessageBox.StandardButton.Yes:
+            # 弹窗通知 + 系统通知
+            msg = f"转换完成  {time_str}  {page_info}  {char_count} 字"
+            send_notification("PaddleOCR 转换完成", msg)
+
+            dlg = QMessageBox(self)
+            dlg.setWindowTitle("转换完成")
+            dlg.setText(msg)
+            dlg.setIcon(QMessageBox.Icon.Information)
+            open_btn = dlg.addButton("打开文件", QMessageBox.ButtonRole.AcceptRole)
+            dlg.addButton("关闭", QMessageBox.ButtonRole.RejectRole)
+            dlg.exec()
+            if dlg.clickedButton() == open_btn:
                 self._open_file(output_path)
 
             # 自动切换到预览页
@@ -293,19 +311,13 @@ class MainWindow(QMainWindow):
         if self._progress_dialog:
             self._progress_dialog.close()
             self._progress_dialog = None
-        from PySide6.QtWidgets import QTextEdit, QDialog, QVBoxLayout, QDialogButtonBox
-        dlg = QDialog(self)
-        dlg.setWindowTitle("处理出错")
-        dlg.setMinimumSize(600, 320)
-        layout = QVBoxLayout(dlg)
-        te = QTextEdit()
-        te.setReadOnly(True)
-        te.setPlainText(msg)
-        layout.addWidget(te)
-        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
-        bb.accepted.connect(dlg.accept)
-        layout.addWidget(bb)
-        dlg.exec()
+
+        self._sidebar.set_processing(False)
+
+        # 错误消息可能很长，截断显示
+        short_msg = msg[:200] + "..." if len(msg) > 200 else msg
+        QMessageBox.critical(self, "处理出错", short_msg)
+        send_notification("PaddleOCR 处理出错", msg[:100])
 
     def _on_cancel(self) -> None:
         if self._worker:

@@ -22,6 +22,10 @@ def _preload_heavy_modules() -> None:
 def main() -> None:
     _preload_heavy_modules()
 
+    import atexit
+    from app.core.ocr_subprocess import shutdown_pool
+    atexit.register(shutdown_pool)
+
     from PySide6.QtWidgets import QApplication
     from app.ui.main_window import MainWindow
 
